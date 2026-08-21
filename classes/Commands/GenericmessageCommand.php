@@ -341,7 +341,50 @@ class GenericmessageCommand extends SystemCommand
 
                         if ($ignoreMessage == false) {
                             $msg = new \erLhcoreClassModelmsg();
-                            $msg->msg = $text;
+                            $msgText = $text;
+                            $metaMsg = [];
+
+                            $replyTo = $message->getReplyToMessage();
+                            $isExplicitReply = ($replyTo && (int)$replyTo->getMessageId() !== (int)$message->getMessageThreadId() && !$replyTo->getForumTopicCreated());
+
+                            if ($isExplicitReply) {
+                                $replyTopicMsgId = (int)$replyTo->getMessageId();
+                                $metaMsg['tg_topic_msg_id'] = (int)$message->getMessageId();
+
+                                $replyMsg = \erLhcoreClassModelmsg::findOne([
+                                    'filter' => ['chat_id' => $chat->id],
+                                    'customfilter' => ['`meta_msg` != \'\' AND JSON_VALID(`meta_msg`) AND JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId]
+                                ]);
+
+                                if ($replyMsg instanceof \erLhcoreClassModelmsg) {
+                                    $quoteText = $message->getQuote() ? trim($message->getQuote()->getText()) : $replyMsg->msg;
+                                    $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
+                                    $msgText = '[quote=' . $replyMsg->id . ']' . $quoteText . '[/quote]' . $msgText;
+
+                                    $metaMsg['content'] = [
+                                        'quote' => [
+                                            'id' => $replyMsg->id,
+                                            'text' => $quoteText,
+                                            'nick' => $replyNick
+                                        ],
+                                        'reply_to' => [
+                                            'db_msg_id' => $replyMsg->id
+                                        ]
+                                    ];
+
+                                    if (isset($replyMsg->meta_msg_array['iwh_msg_id']) && $replyMsg->meta_msg_array['iwh_msg_id'] != '') {
+                                        $metaMsg['content']['reply_to']['iwh_msg_id'] = $replyMsg->meta_msg_array['iwh_msg_id'];
+                                    }
+                                }
+                            } else {
+                                $metaMsg['tg_topic_msg_id'] = (int)$message->getMessageId();
+                            }
+
+                            $msg->msg = $msgText;
+                            if (!empty($metaMsg)) {
+                                $msg->meta_msg = json_encode($metaMsg);
+                                $msg->meta_msg_array = $metaMsg;
+                            }
                             $msg->chat_id = $chat->id;
                             $msg->user_id = $messageUserId;
                             $msg->time = time();

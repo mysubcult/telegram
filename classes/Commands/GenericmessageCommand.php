@@ -344,20 +344,33 @@ class GenericmessageCommand extends SystemCommand
                             $msgText = $text;
                             $metaMsg = [];
 
-                            $replyTo = $message->getReplyToMessage();
-                            $isExplicitReply = ($replyTo && (int)$replyTo->getMessageId() !== (int)$message->getMessageThreadId() && !$replyTo->getForumTopicCreated());
+                            $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
+                            $isExplicitReply = !empty($replyData['is_explicit_reply']) && (int)($replyData['reply_message_id'] ?? 0) > 0;
 
                             if ($isExplicitReply) {
-                                $replyTopicMsgId = (int)$replyTo->getMessageId();
-                                $metaMsg['tg_topic_msg_id'] = (int)$message->getMessageId();
+                                $replyTopicMsgId = (int)$replyData['reply_message_id'];
+                                $metaMsg['tg_topic_msg_id'] = (int)$replyData['message_id'];
 
                                 $replyMsg = \erLhcoreClassModelmsg::findOne([
                                     'filter' => ['chat_id' => $chat->id],
                                     'customfilter' => ['`meta_msg` != \'\' AND JSON_VALID(`meta_msg`) AND JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId]
                                 ]);
 
+                                if (!($replyMsg instanceof \erLhcoreClassModelmsg)) {
+                                    $replyMsg = \erLhcoreClassModelmsg::findOne([
+                                        'filter' => ['chat_id' => $chat->id],
+                                        'customfilter' => ['meta_msg != \'\' AND JSON_VALID(meta_msg) AND JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\')']
+                                    ]);
+                                }
+
                                 if ($replyMsg instanceof \erLhcoreClassModelmsg) {
-                                    $quoteText = $message->getQuote() ? trim($message->getQuote()->getText()) : $replyMsg->msg;
+                                    $quoteText = trim((string)($replyData['quote_text'] ?? ''));
+                                    if ($quoteText === '') {
+                                        $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId);
+                                    }
+                                    if ($quoteText === '') {
+                                        $quoteText = (string)$replyMsg->msg;
+                                    }
                                     $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
                                     $msgText = '[quote=' . $replyMsg->id . ']' . $quoteText . '[/quote]' . $msgText;
 
@@ -368,7 +381,8 @@ class GenericmessageCommand extends SystemCommand
                                             'nick' => $replyNick
                                         ],
                                         'reply_to' => [
-                                            'db_msg_id' => $replyMsg->id
+                                            'db_msg_id' => $replyMsg->id,
+                                            'telegram_message_id' => $replyTopicMsgId
                                         ]
                                     ];
 
@@ -377,7 +391,7 @@ class GenericmessageCommand extends SystemCommand
                                     }
                                 }
                             } else {
-                                $metaMsg['tg_topic_msg_id'] = (int)$message->getMessageId();
+                                $metaMsg['tg_topic_msg_id'] = (int)$replyData['message_id'];
                             }
 
                             $msg->msg = $msgText;

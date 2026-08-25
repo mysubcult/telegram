@@ -830,13 +830,33 @@ class erLhcoreClassExtensionLhctelegram
         unset($value);
     }
 
-    /** Send once, then retry without a stale reply target for known 400 errors. */
-    private function sendTelegramRequest($method, array $data)
+    private function closeTelegramResources(array &$data)
     {
+        foreach ($data as &$value) {
+            if (is_resource($value)) {
+                @fclose($value);
+            }
+        }
+        unset($value);
+    }
+
+    /**
+     * Send once, then retry without a stale reply target for known 400 errors.
+     *
+     * Guzzle closes the raw resource returned by Request::encodeFile() after
+     * consuming a multipart request. Keep the source path/field as private
+     * retry context so a file upload can be reopened for the retry.
+     */
+    private function sendTelegramRequest($method, array $data, $multipartFilePath = '', $multipartFileField = '')
+    {
+        $multipartFilePath = (string)$multipartFilePath;
+        $multipartFileField = (string)$multipartFileField;
+
         try {
             $this->rewindTelegramResources($data);
             $sendData = Longman\TelegramBot\Request::send($method, $data);
         } catch (\Throwable $e) {
+            $this->closeTelegramResources($data);
             erLhcoreClassLog::write('Telegram request exception ' . $e->getMessage(), ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__));
             return new Longman\TelegramBot\Entities\ServerResponse(array('ok' => false, 'error_code' => 500, 'description' => 'Telegram request failed'));
         }
@@ -844,9 +864,17 @@ class erLhcoreClassExtensionLhctelegram
         if ($this->shouldRetryTelegramWithoutReply($sendData) && isset($data['reply_to_message_id'])) {
             unset($data['reply_to_message_id']);
             try {
-                $this->rewindTelegramResources($data);
+                if ($multipartFilePath !== '' && $multipartFileField !== '') {
+                    if (isset($data[$multipartFileField]) && is_resource($data[$multipartFileField])) {
+                        @fclose($data[$multipartFileField]);
+                    }
+                    $data[$multipartFileField] = Longman\TelegramBot\Request::encodeFile($multipartFilePath);
+                } else {
+                    $this->rewindTelegramResources($data);
+                }
                 $sendData = Longman\TelegramBot\Request::send($method, $data);
             } catch (\Throwable $e) {
+                $this->closeTelegramResources($data);
                 erLhcoreClassLog::write('Telegram reply fallback exception ' . $e->getMessage(), ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__));
                 return new Longman\TelegramBot\Entities\ServerResponse(array('ok' => false, 'error_code' => 500, 'description' => 'Telegram reply fallback failed'));
             }
@@ -907,7 +935,7 @@ class erLhcoreClassExtensionLhctelegram
             $data['disable_notification'] = true;
         }
 
-        $sendData = $this->sendTelegramRequest($method, $data);
+        $sendData = $this->sendTelegramRequest($method, $data, $file->file_path_server, $field);
         $this->lastTelegramSendData = $sendData;
         if ($sendData === null) {
             return false;

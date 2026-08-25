@@ -71,6 +71,7 @@ expectTelegramContract(
     'file embeds must be removed from fallback text'
 );
 
+$extension = new erLhcoreClassExtensionLhctelegram();
 $vendorAutoload = __DIR__ . '/../../../lib/vendor/autoload.php';
 if (is_file($vendorAutoload)) {
     require_once $vendorAutoload;
@@ -89,9 +90,42 @@ if (is_file($vendorAutoload)) {
     expectTelegramContract(is_resource($handle), 'Request::encodeFile must return a readable resource');
     fclose($handle);
     unlink($fixture);
+
+    // Guzzle consumes and closes multipart resources. The wrapper must reopen
+    // the local file before retrying a stale reply target.
+    $responses = [
+        new \GuzzleHttp\Psr7\Response(200, [], '{"ok":false,"error_code":400,"description":"Bad Request: message to be replied not found"}'),
+        new \GuzzleHttp\Psr7\Response(200, [], '{"ok":true,"result":{"message_id":123,"date":1,"chat":{"id":-100}}}')
+    ];
+    $requestBodies = [];
+    $handler = function ($request, $options) use (&$responses, &$requestBodies) {
+        $requestBodies[] = $request->getBody()->getContents();
+        return \GuzzleHttp\Promise\Create::promiseFor(array_shift($responses));
+    };
+    new \Longman\TelegramBot\Telegram('123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11', 'contract_bot');
+    \Longman\TelegramBot\Request::setClient(new \GuzzleHttp\Client(['handler' => $handler]));
+
+    $retryFixture = tempnam(sys_get_temp_dir(), 'tg_retry_');
+    file_put_contents($retryFixture, 'retry-fixture-payload');
+    $retryHandle = \Longman\TelegramBot\Request::encodeFile($retryFixture);
+    $retryMethod = new ReflectionMethod($extension, 'sendTelegramRequest');
+    $retryMethod->setAccessible(true);
+    $retryResponse = $retryMethod->invoke($extension, 'sendDocument', [
+        'chat_id' => -100,
+        'message_thread_id' => 77,
+        'document' => $retryHandle,
+        'reply_to_message_id' => 91
+    ], $retryFixture, 'document');
+    expectTelegramContract($retryResponse->isOk(), 'multipart stale-reply retry must succeed');
+    expectTelegramContract(count($requestBodies) === 2, 'multipart stale-reply retry must make two requests');
+    expectTelegramContract(strpos($requestBodies[0], 'retry-fixture-payload') !== false && strpos($requestBodies[1], 'retry-fixture-payload') !== false, 'multipart retry must include the file payload twice');
+    expectTelegramContract(strpos($requestBodies[1], 'reply_to_message_id') === false, 'multipart retry must remove stale reply target');
+    if (is_resource($retryHandle)) {
+        fclose($retryHandle);
+    }
+    unlink($retryFixture);
 }
 
-$extension = new erLhcoreClassExtensionLhctelegram();
 $fallbackMethod = new ReflectionMethod($extension, 'shouldRetryTelegramWithoutReply');
 $fallbackMethod->setAccessible(true);
 $topicMethod = new ReflectionMethod($extension, 'isTelegramTopicUnavailable');

@@ -55,6 +55,18 @@ $topicRoot = (object)[
 $reply = erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($topicRoot);
 expectTelegramContract($reply['is_explicit_reply'] === false, 'topic root service message is not a quote');
 
+$referenceMethod = new ReflectionMethod('erLhcoreClassExtensionLhctelegram', 'buildTelegramReplyReference');
+$referenceMethod->setAccessible(true);
+$localReference = $referenceMethod->invoke(null, 12, 90, '');
+expectTelegramContract(
+    $localReference['db_msg_id'] === 12
+    && $localReference['telegram_message_id'] === 90
+    && !array_key_exists('iwh_msg_id', $localReference),
+    'local-only quote must not create an empty external reply ID'
+);
+$externalReference = $referenceMethod->invoke(null, 12, 90, 'tg-90');
+expectTelegramContract($externalReference['iwh_msg_id'] === 'tg-90', 'external reply ID is preserved');
+
 $stored = (object)[
     'msg' => 'fallback [file=12_0123456789abcdef0123456789abcdef]',
     'meta_msg_array' => [

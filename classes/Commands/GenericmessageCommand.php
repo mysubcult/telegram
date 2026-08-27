@@ -405,16 +405,19 @@ class GenericmessageCommand extends SystemCommand
                                         }
                                     }
                                     $replyExternalId = trim((string)($replyMsgMeta['iwh_msg_id'] ?? ''));
-                                    $replyReference = [
-                                        'db_msg_id' => $replyMsg->id,
-                                        'telegram_message_id' => $replyTopicMsgId
-                                    ];
+                                    $replyReference = \erLhcoreClassExtensionLhctelegram::buildTelegramReplyReference(
+                                        $replyMsg->id,
+                                        $replyTopicMsgId,
+                                        $replyExternalId
+                                    );
 
                                     // Keep the local quote/reply target even when the
                                     // original LHC message has no external visitor ID.
                                     // The REST core cannot render an empty iwh_msg_id, so
-                                    // only add that optional field when it is present.
-                                    $metaMsg['content']['reply_to'] = $replyReference;
+                                    // only add the REST reply reference when it is present.
+                                    if ($replyExternalId !== '') {
+                                        $metaMsg['content']['reply_to'] = $replyReference;
+                                    }
                                     $quoteText = trim((string)($replyData['quote_text'] ?? ''));
                                     if ($quoteText === '') {
                                         $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId, $topicContext);
@@ -434,9 +437,6 @@ class GenericmessageCommand extends SystemCommand
                                         'text' => $quoteText,
                                         'nick' => $replyNick
                                     ];
-                                    if ($replyExternalId !== '') {
-                                        $metaMsg['content']['reply_to']['iwh_msg_id'] = $replyExternalId;
-                                    }
                                 }
                             }
 

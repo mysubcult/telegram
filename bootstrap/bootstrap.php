@@ -534,6 +534,23 @@ class erLhcoreClassExtensionLhctelegram
     }
 
     /**
+     * Build the local reply reference used by the REST action.
+     * An empty external ID must never reach the core reply renderer.
+     */
+    public static function buildTelegramReplyReference($dbMessageId, $telegramMessageId, $externalId = '')
+    {
+        $reference = array(
+            'db_msg_id' => (int)$dbMessageId,
+            'telegram_message_id' => (int)$telegramMessageId
+        );
+        $externalId = trim((string)$externalId);
+        if ($externalId !== '') {
+            $reference['iwh_msg_id'] = $externalId;
+        }
+        return $reference;
+    }
+
+    /**
      * Ensure an incoming forum update belongs to the configured Telegram group.
      * Message/thread IDs are scoped to a chat and can otherwise collide.
      */

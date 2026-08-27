@@ -551,6 +551,19 @@ class erLhcoreClassExtensionLhctelegram
     }
 
     /**
+     * Add the quote marker only when the REST action can resolve an external
+     * Telegram reply target. Local-only quotes remain in metadata instead of
+     * triggering the core's empty reply block.
+     */
+    public static function formatTelegramQuotedText($messageText, $dbMessageId, $quoteText, $externalId = '')
+    {
+        if (trim((string)$externalId) === '') {
+            return (string)$messageText;
+        }
+        return '[quote=' . (int)$dbMessageId . ']' . (string)$quoteText . '[/quote]' . (string)$messageText;
+    }
+
+    /**
      * Ensure an incoming forum update belongs to the configured Telegram group.
      * Message/thread IDs are scoped to a chat and can otherwise collide.
      */

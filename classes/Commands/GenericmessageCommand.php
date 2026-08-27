@@ -431,7 +431,12 @@ class GenericmessageCommand extends SystemCommand
                                         $quoteText = trim($quoteText);
                                     }
                                     $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
-                                    $msgText = '[quote=' . $replyMsg->id . ']' . $quoteText . '[/quote]' . $msgText;
+                                    $msgText = \erLhcoreClassExtensionLhctelegram::formatTelegramQuotedText(
+                                        $msgText,
+                                        $replyMsg->id,
+                                        $quoteText,
+                                        $replyExternalId
+                                    );
                                     $metaMsg['content']['quote'] = [
                                         'id' => $replyMsg->id,
                                         'text' => $quoteText,

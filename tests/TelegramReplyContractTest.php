@@ -66,6 +66,16 @@ expectTelegramContract(
 );
 $externalReference = $referenceMethod->invoke(null, 12, 90, 'tg-90');
 expectTelegramContract($externalReference['iwh_msg_id'] === 'tg-90', 'external reply ID is preserved');
+$formatMethod = new ReflectionMethod('erLhcoreClassExtensionLhctelegram', 'formatTelegramQuotedText');
+$formatMethod->setAccessible(true);
+expectTelegramContract(
+    $formatMethod->invoke(null, 'reply body', 12, 'local quote', '') === 'reply body',
+    'local-only quote must not add a core reply marker'
+);
+expectTelegramContract(
+    $formatMethod->invoke(null, 'reply body', 12, 'external quote', 'tg-90') === '[quote=12]external quote[/quote]reply body',
+    'external quote keeps the core reply marker'
+);
 
 $stored = (object)[
     'msg' => 'fallback [file=12_0123456789abcdef0123456789abcdef]',

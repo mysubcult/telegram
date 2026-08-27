@@ -551,15 +551,17 @@ class erLhcoreClassExtensionLhctelegram
     }
 
     /**
-     * Add the quote marker only when the REST action can resolve an external
-     * Telegram reply target. Local-only quotes remain in metadata instead of
-     * triggering the core's empty reply block.
+     * Use the numeric marker only when the REST action can resolve an external
+     * Telegram reply target. Local-only quotes use the regular display marker
+     * without an ID, so the core never renders an empty reply block.
      */
     public static function formatTelegramQuotedText($messageText, $dbMessageId, $quoteText, $externalId = '')
     {
         $quoteText = self::normalizeTelegramQuoteText($quoteText);
         if (trim((string)$externalId) === '') {
-            return (string)$messageText;
+            return $quoteText !== ''
+                ? '[quote]' . $quoteText . '[/quote]' . (string)$messageText
+                : (string)$messageText;
         }
         return '[quote=' . (int)$dbMessageId . ']' . (string)$quoteText . '[/quote]' . (string)$messageText;
     }

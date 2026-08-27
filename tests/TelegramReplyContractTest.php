@@ -69,8 +69,12 @@ expectTelegramContract($externalReference['iwh_msg_id'] === 'tg-90', 'external r
 $formatMethod = new ReflectionMethod('erLhcoreClassExtensionLhctelegram', 'formatTelegramQuotedText');
 $formatMethod->setAccessible(true);
 expectTelegramContract(
-    $formatMethod->invoke(null, 'reply body', 12, 'local quote', '') === 'reply body',
-    'local-only quote must not add a core reply marker'
+    $formatMethod->invoke(null, 'reply body', 12, 'local quote', '') === '[quote]local quote[/quote]reply body',
+    'local-only quote must keep a display marker without a core reply ID'
+);
+expectTelegramContract(
+    preg_match('#\[quote="?([0-9]+)"?\]#i', $formatMethod->invoke(null, 'reply body', 12, 'local quote', '')) !== 1,
+    'local-only quote must not add a numeric core reply marker'
 );
 expectTelegramContract(
     $formatMethod->invoke(null, 'reply body', 12, 'external quote', 'tg-90') === '[quote=12]external quote[/quote]reply body',

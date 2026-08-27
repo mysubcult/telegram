@@ -261,6 +261,11 @@ class GenericmessageCommand extends SystemCommand
                     $chat = $tchat->chat;
 
                     if ($chat instanceof \erLhcoreClassModelChat) {
+                        $topicContext = array(
+                            'bot_id' => (int)$tBot->id,
+                            'group_chat_id' => (string)$chat_id
+                        );
+                        $topicNamespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespace($topicContext['bot_id'], $topicContext['group_chat_id']);
 
                         if ($type === 'photo') {
                             $text = $this->appendCaptionToFileEmbed($message, $this->processPhoto($chat, $message, $tBot));
@@ -351,52 +356,88 @@ class GenericmessageCommand extends SystemCommand
 
                             $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
                             $isExplicitReply = !empty($replyData['is_explicit_reply']) && (int)($replyData['reply_message_id'] ?? 0) > 0;
+                            $telegramMessageId = (int)($replyData['message_id'] ?? 0);
+
+                            if ($telegramMessageId > 0) {
+                                $metaMsg['tg_topic_msg_id'] = $telegramMessageId;
+                                $metaMsg['tg_topic_msg_contexts'] = array(
+                                    $topicNamespace => array(
+                                        'ids' => array($telegramMessageId),
+                                        'latest_id' => $telegramMessageId,
+                                        'bot_id' => $topicContext['bot_id'],
+                                        'group_chat_id' => $topicContext['group_chat_id'],
+                                        'map' => array(
+                                            (string)$telegramMessageId => array(
+                                                'text' => $this->stripTelegramFileEmbeds($text),
+                                                'kind' => 'text'
+                                            )
+                                        )
+                                    )
+                                );
+                            }
 
                             if ($isExplicitReply) {
                                 $replyTopicMsgId = (int)$replyData['reply_message_id'];
-                                $metaMsg['tg_topic_msg_id'] = (int)$replyData['message_id'];
-
+                                $db = \ezcDbInstance::get();
+                                $topicMessageIdsPath = '$.tg_topic_msg_contexts.' . $topicNamespace . '.ids';
                                 $replyMsg = \erLhcoreClassModelmsg::findOne([
                                     'filter' => ['chat_id' => $chat->id],
-                                    'customfilter' => ['`meta_msg` != \'\' AND JSON_VALID(`meta_msg`) AND JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId]
+                                    'customfilter' => [
+                                        '`meta_msg` != \'\' AND JSON_VALID(`meta_msg`) AND JSON_CONTAINS(JSON_EXTRACT(meta_msg, ' . $db->quote($topicMessageIdsPath) . '), ' . $db->quote(json_encode(array($replyTopicMsgId))) . ')'
+                                    ]
                                 ]);
 
                                 if (!($replyMsg instanceof \erLhcoreClassModelmsg)) {
                                     $replyMsg = \erLhcoreClassModelmsg::findOne([
                                         'filter' => ['chat_id' => $chat->id],
-                                        'customfilter' => ['meta_msg != \'\' AND JSON_VALID(meta_msg) AND JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\')']
+                                        'customfilter' => [
+                                            'meta_msg != \'\' AND JSON_VALID(meta_msg) AND JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_contexts\') IS NULL AND (JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId . ' OR JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\'))'
+                                        ]
                                     ]);
                                 }
 
                                 if ($replyMsg instanceof \erLhcoreClassModelmsg) {
+                                    $replyMsgMeta = is_array($replyMsg->meta_msg_array) ? $replyMsg->meta_msg_array : array();
+                                    if (empty($replyMsgMeta) && isset($replyMsg->meta_msg) && is_string($replyMsg->meta_msg)) {
+                                        $decodedReplyMeta = json_decode($replyMsg->meta_msg, true);
+                                        if (is_array($decodedReplyMeta)) {
+                                            $replyMsgMeta = $decodedReplyMeta;
+                                        }
+                                    }
+                                    $replyExternalId = trim((string)($replyMsgMeta['iwh_msg_id'] ?? ''));
+                                    $replyReference = [
+                                        'db_msg_id' => $replyMsg->id,
+                                        'telegram_message_id' => $replyTopicMsgId
+                                    ];
+
+                                    // Keep the local quote/reply target even when the
+                                    // original LHC message has no external visitor ID.
+                                    // The REST core cannot render an empty iwh_msg_id, so
+                                    // only add that optional field when it is present.
+                                    $metaMsg['content']['reply_to'] = $replyReference;
                                     $quoteText = trim((string)($replyData['quote_text'] ?? ''));
                                     if ($quoteText === '') {
-                                        $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId);
+                                        $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId, $topicContext);
                                     }
                                     if ($quoteText === '') {
-                                        $quoteText = (string)$replyMsg->msg;
+                                        $quoteText = html_entity_decode(
+                                            preg_replace('/\[file=\d+_[a-z0-9]+\]/i', '', (string)$replyMsg->msg),
+                                            ENT_QUOTES | ENT_HTML5,
+                                            'UTF-8'
+                                        );
+                                        $quoteText = trim($quoteText);
                                     }
                                     $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
                                     $msgText = '[quote=' . $replyMsg->id . ']' . $quoteText . '[/quote]' . $msgText;
-
-                                    $metaMsg['content'] = [
-                                        'quote' => [
-                                            'id' => $replyMsg->id,
-                                            'text' => $quoteText,
-                                            'nick' => $replyNick
-                                        ],
-                                        'reply_to' => [
-                                            'db_msg_id' => $replyMsg->id,
-                                            'telegram_message_id' => $replyTopicMsgId
-                                        ]
+                                    $metaMsg['content']['quote'] = [
+                                        'id' => $replyMsg->id,
+                                        'text' => $quoteText,
+                                        'nick' => $replyNick
                                     ];
-
-                                    if (isset($replyMsg->meta_msg_array['iwh_msg_id']) && $replyMsg->meta_msg_array['iwh_msg_id'] != '') {
-                                        $metaMsg['content']['reply_to']['iwh_msg_id'] = $replyMsg->meta_msg_array['iwh_msg_id'];
+                                    if ($replyExternalId !== '') {
+                                        $metaMsg['content']['reply_to']['iwh_msg_id'] = $replyExternalId;
                                     }
                                 }
-                            } else {
-                                $metaMsg['tg_topic_msg_id'] = (int)$replyData['message_id'];
                             }
 
                             $msg->msg = $msgText;

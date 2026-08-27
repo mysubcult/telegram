@@ -1073,7 +1073,18 @@ class erLhcoreClassExtensionLhctelegram
             // A split HTML message cannot safely retain arbitrary open tags or
             // entities. Long messages deliberately fall back to escaped text.
             $plainText = preg_replace('#<(?:br|/p|/div)\s*/?>#i', "\n", $text);
-            $plainText = html_entity_decode(strip_tags($plainText), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            // strip_tags() drops a run of literal '<' characters as if it were
+            // an unfinished tag. Remove only tag-shaped markup so user text is
+            // retained and can still be escaped/split below.
+            $plainText = preg_replace('#<!--.*?-->|<![^>]*>|</?[a-z][^>]*>#is', '', (string)$plainText);
+            $plainText = html_entity_decode($plainText, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            if (trim($text) !== '' && trim($plainText) === '') {
+                // PHP's strip_tags() drops malformed/raw angle-bracket text
+                // such as "<" x5000. Keep it as text so the splitter can
+                // escape and bound the payload instead of returning one
+                // oversized raw HTML chunk.
+                $plainText = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
             if ($this->getTelegramTextLength($this->escapeTelegramHtmlText($plainText)) <= 4096) {
                 return array($data);
             }

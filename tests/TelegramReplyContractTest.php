@@ -177,6 +177,24 @@ foreach ($ampChunks as $chunk) {
     expectTelegramContract($lengthMethod->invoke($extension, $chunk['text']) <= 4000, 'escaped HTML chunk must be within UTF-16 limit');
 }
 
+$literalLessThanChunks = $splitMethod->invoke($extension, [
+    'chat_id' => -100,
+    'parse_mode' => 'HTML',
+    'text' => str_repeat('<', 5000)
+]);
+expectTelegramContract(count($literalLessThanChunks) > 1, 'literal HTML less-than signs must be split');
+foreach ($literalLessThanChunks as $chunk) {
+    expectTelegramContract($lengthMethod->invoke($extension, $chunk['text']) <= 4000, 'literal less-than chunk must be within UTF-16 limit');
+    expectTelegramContract(strpos($chunk['text'], '&lt;') !== false, 'literal less-than signs must be escaped');
+}
+
+$shortHtml = $splitMethod->invoke($extension, [
+    'chat_id' => -100,
+    'parse_mode' => 'HTML',
+    'text' => '<i>short valid HTML</i>'
+]);
+expectTelegramContract(count($shortHtml) === 1 && $shortHtml[0]['text'] === '<i>short valid HTML</i>', 'short valid HTML must keep its markup');
+
 $vendorAutoload = __DIR__ . '/../../../lib/vendor/autoload.php';
 if (is_file($vendorAutoload)) {
     require_once $vendorAutoload;

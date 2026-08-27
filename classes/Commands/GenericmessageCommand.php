@@ -413,11 +413,10 @@ class GenericmessageCommand extends SystemCommand
 
                                     // Keep the local quote/reply target even when the
                                     // original LHC message has no external visitor ID.
-                                    // The REST core cannot render an empty iwh_msg_id, so
-                                    // only add the REST reply reference when it is present.
-                                    if ($replyExternalId !== '') {
-                                        $metaMsg['content']['reply_to'] = $replyReference;
-                                    }
+                                    // The REST core only consumes iwh_msg_id from its
+                                    // numeric quote marker; this metadata is consumed
+                                    // by the Telegram extension for direct topic replies.
+                                    $metaMsg['content']['reply_to'] = $replyReference;
                                     $quoteText = trim((string)($replyData['quote_text'] ?? ''));
                                     if ($quoteText === '') {
                                         $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId, $topicContext);

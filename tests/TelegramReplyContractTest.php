@@ -113,6 +113,13 @@ expectTelegramContract(
 );
 
 $extension = new erLhcoreClassExtensionLhctelegram();
+$sendFileMethod = new ReflectionMethod($extension, 'sendTelegramChatFile');
+$sendFileMethod->setAccessible(true);
+$missingFile = (object)['file_path_server' => sys_get_temp_dir() . '/telegram-contract-missing-file'];
+expectTelegramContract(
+    $sendFileMethod->invoke($extension, (object)[], ['file' => $missingFile], '') === false,
+    'missing local files must not be sent as broken download URLs'
+);
 $splitMethod = new ReflectionMethod($extension, 'getTelegramMessageChunks');
 $splitMethod->setAccessible(true);
 $lengthMethod = new ReflectionMethod($extension, 'getTelegramTextLength');

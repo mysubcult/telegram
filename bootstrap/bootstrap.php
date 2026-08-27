@@ -1266,6 +1266,15 @@ class erLhcoreClassExtensionLhctelegram
         $this->lastTelegramSendData = null;
         $file = $fileData['file'];
 
+        // The download URL below resolves the stored local file. Do not send
+        // a broken URL when cleanup removed the file before the worker ran.
+        if (!is_object($file)
+            || !is_string($file->file_path_server ?? null)
+            || !is_file($file->file_path_server)
+            || !is_readable($file->file_path_server)) {
+            return false;
+        }
+
         $extension = strtolower((string)$file->extension);
         $type = strtolower((string)$file->type);
         $method = 'sendDocument';

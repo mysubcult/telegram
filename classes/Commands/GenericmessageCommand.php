@@ -253,6 +253,11 @@ class GenericmessageCommand extends SystemCommand
 
                 foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['bot_id' => $tBot->id, 'tchat_id' => $message->getMessageThreadId(), 'type' => 1]]) as $tchat) {
 
+                    // Telegram message/thread IDs are only unique within one chat.
+                    if (!\erLhcoreClassExtensionLhctelegram::isTelegramForumChatMessage($tchat, $chat_id)) {
+                        continue;
+                    }
+
                     $chat = $tchat->chat;
 
                     if ($chat instanceof \erLhcoreClassModelChat) {

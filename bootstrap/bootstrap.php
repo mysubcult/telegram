@@ -533,6 +533,21 @@ class erLhcoreClassExtensionLhctelegram
     }
 
     /**
+     * Ensure an incoming forum update belongs to the configured Telegram group.
+     * Message/thread IDs are scoped to a chat and can otherwise collide.
+     */
+    public static function isTelegramForumChatMessage($tchat, $chatId)
+    {
+        if (!is_object($tchat) || !is_object($tchat->bot)) {
+            return false;
+        }
+
+        $groupChatId = $tchat->bot->group_chat_id ?? null;
+        return is_numeric($groupChatId) && is_numeric($chatId)
+            && (int)$groupChatId === (int)$chatId;
+    }
+
+    /**
      * Return the text/caption that was sent for a stored Telegram message.
      * This is used when Telegram omitted Message.quote (the normal case on core 79e5e3a).
      */

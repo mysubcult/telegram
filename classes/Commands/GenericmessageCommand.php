@@ -430,6 +430,7 @@ class GenericmessageCommand extends SystemCommand
                                         );
                                         $quoteText = trim($quoteText);
                                     }
+                                    $quoteText = \erLhcoreClassExtensionLhctelegram::normalizeTelegramQuoteText($quoteText);
                                     $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
                                     $msgText = \erLhcoreClassExtensionLhctelegram::formatTelegramQuotedText(
                                         $msgText,

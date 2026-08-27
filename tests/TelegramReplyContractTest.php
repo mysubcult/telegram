@@ -76,6 +76,10 @@ expectTelegramContract(
     $formatMethod->invoke(null, 'reply body', 12, 'external quote', 'tg-90') === '[quote=12]external quote[/quote]reply body',
     'external quote keeps the core reply marker'
 );
+expectTelegramContract(
+    erLhcoreClassExtensionLhctelegram::normalizeTelegramQuoteText('[quote=99]nested[/quote] text') === 'nested text',
+    'nested quote markers must not be injected from Telegram text'
+);
 
 $stored = (object)[
     'msg' => 'fallback [file=12_0123456789abcdef0123456789abcdef]',

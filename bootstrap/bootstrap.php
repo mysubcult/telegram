@@ -358,7 +358,18 @@ class erLhcoreClassExtensionLhctelegram
 
     private function stripTelegramFileEmbeds($text)
     {
-        return trim(preg_replace('/\[file=\d+_[a-z0-9]+\]/i', '', (string)$text));
+        return self::stripTelegramFileEmbedsText($text);
+    }
+
+    /**
+     * Normalize a Telegram message body without attachment embeds.
+     * Commands use this helper because their magic __call delegates unknown
+     * methods to the Telegram Update object, not to this extension instance.
+     */
+    public static function stripTelegramFileEmbedsText($text)
+    {
+        $clean = preg_replace('/\[file=\d+_[a-z0-9]+\]/i', '', (string)$text);
+        return trim($clean === null ? '' : $clean);
     }
 
     private function getTelegramMessageFiles($msg)

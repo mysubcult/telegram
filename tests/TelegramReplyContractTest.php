@@ -149,6 +149,15 @@ expectTelegramContract(
     erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($namespaced, 92, ['bot_id' => 7, 'group_chat_id' => '-100123']) === 'legacy fallback',
     'null namespaced map text must fall back to the stored message body'
 );
+expectTelegramContract(
+    erLhcoreClassExtensionLhctelegram::stripTelegramFileEmbedsText('operator body [file=12_0123456789abcdef0123456789abcdef]') === 'operator body',
+    'Telegram command text helper must strip file embeds without Update delegation'
+);
+$genericMessageSource = file_get_contents(__DIR__ . '/../classes/Commands/GenericmessageCommand.php');
+expectTelegramContract(
+    is_string($genericMessageSource) && strpos($genericMessageSource, '::stripTelegramFileEmbedsText($text)') !== false,
+    'Telegram generic command must use the extension text helper explicitly'
+);
 
 $extension = new erLhcoreClassExtensionLhctelegram();
 $sendFileMethod = new ReflectionMethod($extension, 'sendTelegramChatFile');

@@ -368,7 +368,7 @@ class GenericmessageCommand extends SystemCommand
                                         'group_chat_id' => $topicContext['group_chat_id'],
                                         'map' => array(
                                             (string)$telegramMessageId => array(
-                                                'text' => $this->stripTelegramFileEmbeds($text),
+                                                'text' => \erLhcoreClassExtensionLhctelegram::stripTelegramFileEmbedsText($text),
                                                 'kind' => 'text'
                                             )
                                         )

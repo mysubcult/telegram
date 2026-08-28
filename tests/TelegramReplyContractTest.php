@@ -55,6 +55,18 @@ $topicRoot = (object)[
 $reply = erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($topicRoot);
 expectTelegramContract($reply['is_explicit_reply'] === false, 'topic root service message is not a quote');
 
+$topicRootReply = (object)[
+    'raw_data' => [
+        'message_id' => 105,
+        'message_thread_id' => 50,
+        'reply_to_message' => [
+            'message_id' => 50
+        ]
+    ]
+];
+$reply = erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($topicRootReply);
+expectTelegramContract($reply['is_explicit_reply'] === true, 'ordinary reply to a topic root must be explicit');
+
 $referenceMethod = new ReflectionMethod('erLhcoreClassExtensionLhctelegram', 'buildTelegramReplyReference');
 $referenceMethod->setAccessible(true);
 $localReference = $referenceMethod->invoke(null, 12, 90, '');
@@ -128,6 +140,14 @@ $namespaced->meta_msg_array['tg_topic_msg_contexts'][$namespaceA]['map']['91'] =
 expectTelegramContract(
     erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($namespaced, 91, ['bot_id' => 7, 'group_chat_id' => '-100123']) === 'caption &',
     'stored HTML captions and file embeds must be normalized for fallback quotes'
+);
+$namespaced->meta_msg_array['tg_topic_msg_contexts'][$namespaceA]['map']['92'] = [
+    'text' => null,
+    'kind' => 'text'
+];
+expectTelegramContract(
+    erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($namespaced, 92, ['bot_id' => 7, 'group_chat_id' => '-100123']) === 'legacy fallback',
+    'null namespaced map text must fall back to the stored message body'
 );
 
 $extension = new erLhcoreClassExtensionLhctelegram();

@@ -519,7 +519,7 @@ class erLhcoreClassExtensionLhctelegram
             $quoteText = self::getTelegramQuoteText($quote);
         }
 
-        $forumTopicCreated = isset($replyRaw['forum_topic_created']);
+        $forumTopicCreated = isset($raw['forum_topic_created']) || isset($replyRaw['forum_topic_created']);
         if (!$forumTopicCreated && is_object($replyObject)) {
             $forumTopicCreated = (bool)self::getTelegramEntityProperty($replyObject, 'forum_topic_created');
         }
@@ -528,7 +528,7 @@ class erLhcoreClassExtensionLhctelegram
             'message_id' => $messageId,
             'thread_id' => $threadId,
             'reply_message_id' => $replyMessageId,
-            'is_explicit_reply' => $replyMessageId > 0 && $replyMessageId !== $threadId && !$forumTopicCreated,
+            'is_explicit_reply' => $replyMessageId > 0 && !$forumTopicCreated,
             'quote_text' => $quoteText
         );
     }
@@ -669,7 +669,10 @@ class erLhcoreClassExtensionLhctelegram
                 }
             }
 
-            return '';
+            // Older operator messages can contain a namespaced map entry with
+            // a JSON null text value. The message row is still scoped to this
+            // Telegram destination, so its body is a safe local fallback.
+            return self::normalizeStoredTelegramMessageText($msg->msg);
         }
 
         if ($key !== '' && isset($meta['tg_topic_msg_map'][$key]) && is_array($meta['tg_topic_msg_map'][$key])) {

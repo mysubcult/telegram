@@ -127,7 +127,7 @@ class erLhcoreClassExtensionLhctelegram
                 if (isset($params['data']['message']['chat']['id'])) {
                     $chatId = $params['data']['message']['chat']['id'];
                     $messageData = $params['data']['message']['from'];
-                } elseif (isset($params['data']['message']['chat']['id'])) {
+                } elseif (isset($params['data']['callback_query']['message']['chat']['id'])) {
                     $chatId = $params['data']['callback_query']['message']['chat']['id'];
                     $messageData = $params['data']['callback_query']['from'];
                 }

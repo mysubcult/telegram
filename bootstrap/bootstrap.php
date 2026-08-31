@@ -1344,16 +1344,32 @@ class erLhcoreClassExtensionLhctelegram
             $field = 'video';
         }
 
+        $multipartFilePath = '';
+        $multipartFileField = '';
+        $fileSize = is_file($file->file_path_server) ? filesize($file->file_path_server) : 0;
+
         try {
             $data = array(
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
-                'parse_mode' => 'HTML',
-                // Keep the accepted URL-based path: downloadfile applies the
-                // original upload name and storage callbacks before Telegram
-                // receives the file.
-                $field => $this->getTelegramChatFileUrl($file)
+                'parse_mode' => 'HTML'
             );
+
+            // Telegram Bot API supports multipart file uploads up to 50 MB (52428800 bytes).
+            // URL-based download limit on Telegram servers is restricted to 20 MB.
+            // Uploading directly from server disk allows files 20MB-50MB (e.g. video recordings) to be delivered as native media.
+            if ($fileSize > 0 && $fileSize <= 52428800) {
+                $fileHandle = Longman\TelegramBot\Request::encodeFile($file->file_path_server);
+                if (is_resource($fileHandle)) {
+                    $data[$field] = $fileHandle;
+                    $multipartFilePath = $file->file_path_server;
+                    $multipartFileField = $field;
+                } else {
+                    $data[$field] = $this->getTelegramChatFileUrl($file);
+                }
+            } else {
+                $data[$field] = $this->getTelegramChatFileUrl($file);
+            }
         } catch (\Throwable $e) {
             erLhcoreClassLog::write('SendFile encode exception ' . $e->getMessage(), ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__, 'object_id' => $file->chat_id));
             return false;
@@ -1371,7 +1387,7 @@ class erLhcoreClassExtensionLhctelegram
             $data['disable_notification'] = true;
         }
 
-        $sendData = $this->sendTelegramRequest($method, $data);
+        $sendData = $this->sendTelegramRequest($method, $data, $multipartFilePath, $multipartFileField);
         $this->lastTelegramSendData = $sendData;
         if ($sendData === null) {
             return false;

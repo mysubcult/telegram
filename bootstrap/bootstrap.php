@@ -1346,6 +1346,8 @@ class erLhcoreClassExtensionLhctelegram
 
         $multipartFilePath = '';
         $multipartFileField = '';
+        $tempUploadDir = null;
+        $tempUploadFile = null;
         $fileSize = is_file($file->file_path_server) ? filesize($file->file_path_server) : 0;
 
         try {
@@ -1359,10 +1361,30 @@ class erLhcoreClassExtensionLhctelegram
             // URL-based download limit on Telegram servers is restricted to 20 MB.
             // Uploading directly from server disk allows files 20MB-50MB (e.g. video recordings) to be delivered as native media.
             if ($fileSize > 0 && $fileSize <= 52428800) {
-                $fileHandle = Longman\TelegramBot\Request::encodeFile($file->file_path_server);
+                // Ensure the file retains its original filename and extension (e.g. .pdf, .zip, .docx) so Telegram displays and opens it properly
+                $originalFilename = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
+                if (!empty($file->extension) && !preg_match('/\.' . preg_quote($file->extension, '/') . '$/i', $originalFilename)) {
+                    $originalFilename .= '.' . $file->extension;
+                }
+                $cleanFilename = preg_replace('/[^\w\.\-\s\(\)\[\]]/u', '_', $originalFilename);
+                if (empty($cleanFilename) || $cleanFilename === '.' . $file->extension) {
+                    $cleanFilename = 'file_' . $file->id . (!empty($file->extension) ? '.' . $file->extension : '');
+                }
+
+                $tempUploadDir = sys_get_temp_dir() . '/lhc_tg_upload_' . $file->id . '_' . bin2hex(random_bytes(4));
+                if (!is_dir($tempUploadDir)) {
+                    @mkdir($tempUploadDir, 0777, true);
+                }
+                $tempUploadFile = $tempUploadDir . '/' . $cleanFilename;
+                if (!@symlink($file->file_path_server, $tempUploadFile)) {
+                    @copy($file->file_path_server, $tempUploadFile);
+                }
+
+                $fileToEncode = is_file($tempUploadFile) ? $tempUploadFile : $file->file_path_server;
+                $fileHandle = Longman\TelegramBot\Request::encodeFile($fileToEncode);
                 if (is_resource($fileHandle)) {
                     $data[$field] = $fileHandle;
-                    $multipartFilePath = $file->file_path_server;
+                    $multipartFilePath = $fileToEncode;
                     $multipartFileField = $field;
                 } else {
                     $data[$field] = $this->getTelegramChatFileUrl($file);
@@ -1371,6 +1393,8 @@ class erLhcoreClassExtensionLhctelegram
                 $data[$field] = $this->getTelegramChatFileUrl($file);
             }
         } catch (\Throwable $e) {
+            if ($tempUploadFile && (is_file($tempUploadFile) || is_link($tempUploadFile))) { @unlink($tempUploadFile); }
+            if ($tempUploadDir && is_dir($tempUploadDir)) { @rmdir($tempUploadDir); }
             erLhcoreClassLog::write('SendFile encode exception ' . $e->getMessage(), ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__, 'object_id' => $file->chat_id));
             return false;
         }
@@ -1388,6 +1412,12 @@ class erLhcoreClassExtensionLhctelegram
         }
 
         $sendData = $this->sendTelegramRequest($method, $data, $multipartFilePath, $multipartFileField);
+        if ($tempUploadFile && (is_file($tempUploadFile) || is_link($tempUploadFile))) {
+            @unlink($tempUploadFile);
+        }
+        if ($tempUploadDir && is_dir($tempUploadDir)) {
+            @rmdir($tempUploadDir);
+        }
         $this->lastTelegramSendData = $sendData;
         if ($sendData === null) {
             return false;

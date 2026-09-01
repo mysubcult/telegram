@@ -1314,7 +1314,7 @@ class erLhcoreClassExtensionLhctelegram
     private function sendTelegramChatFile($tchat, $fileData, $caption, $disableNotification = false, $params = array())
     {
         $this->lastTelegramSendData = null;
-        $file = $fileData['file'];
+        $file = is_object($fileData) ? $fileData : ($fileData['file'] ?? null);
 
         // The download URL below resolves the stored local file. Do not send
         // a broken URL when cleanup removed the file before the worker ran.
@@ -1376,9 +1376,7 @@ class erLhcoreClassExtensionLhctelegram
                     @mkdir($tempUploadDir, 0777, true);
                 }
                 $tempUploadFile = $tempUploadDir . '/' . $cleanFilename;
-                if (!@symlink($file->file_path_server, $tempUploadFile)) {
-                    @copy($file->file_path_server, $tempUploadFile);
-                }
+                @copy($file->file_path_server, $tempUploadFile);
 
                 $fileToEncode = is_file($tempUploadFile) ? $tempUploadFile : $file->file_path_server;
                 $fileHandle = Longman\TelegramBot\Request::encodeFile($fileToEncode);

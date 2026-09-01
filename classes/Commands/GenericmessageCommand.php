@@ -95,11 +95,20 @@ class GenericmessageCommand extends SystemCommand
                 );
 
                 $partsNames = explode('/',$filePath);
-                $uploadName = array_pop($partsNames);
+                $fallbackUploadName = array_pop($partsNames);
+                $uploadName = (!empty($params['file_name'])) ? $params['file_name'] : $fallbackUploadName;
+
+                if (!empty($params['mime_type'])) {
+                    $mimeTypeResolved = $params['mime_type'];
+                } elseif (isset($mimeTypes[$ext])) {
+                    $mimeTypeResolved = $mimeTypes[$ext];
+                } else {
+                    $mimeTypeResolved = 'application/octet-stream';
+                }
 
                 $fileUpload = new \erLhcoreClassModelChatFile();
                 $fileUpload->size = $photo_file->getFileSize();
-                $fileUpload->type = isset($mimeTypes[$ext]) ? $mimeTypes[$ext] : 'application/octet-stream';
+                $fileUpload->type = $mimeTypeResolved;
                 $fileUpload->name = md5($filePath . time() . rand(0,100));
                 $fileUpload->date = time();
                 $fileUpload->user_id = 0;
@@ -270,11 +279,20 @@ class GenericmessageCommand extends SystemCommand
                         if ($type === 'photo') {
                             $text = $this->appendCaptionToFileEmbed($message, $this->processPhoto($chat, $message, $tBot));
                         } elseif ($type === 'animation') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getAnimation()->getFileId(), $chat, $tBot, array('ext' => $this->getAnimationExtension($message))));
+                            $animation = $message->getAnimation();
+                            $animName = is_object($animation) && method_exists($animation, 'getFileName') ? $animation->getFileName() : '';
+                            $animMime = is_object($animation) && method_exists($animation, 'getMimeType') ? $animation->getMimeType() : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($animation->getFileId(), $chat, $tBot, array('ext' => $this->getAnimationExtension($message), 'file_name' => $animName, 'mime_type' => $animMime)));
                         } elseif ($type === 'document') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getDocument()->getFileId(), $chat, $tBot));
+                            $doc = $message->getDocument();
+                            $docName = is_object($doc) && method_exists($doc, 'getFileName') ? $doc->getFileName() : '';
+                            $docMime = is_object($doc) && method_exists($doc, 'getMimeType') ? $doc->getMimeType() : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($doc->getFileId(), $chat, $tBot, array('file_name' => $docName, 'mime_type' => $docMime)));
                         } elseif ($type === 'video') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getVideo()->getFileId(), $chat, $tBot, array('ext' => 'mp4')));
+                            $video = $message->getVideo();
+                            $vidName = is_object($video) && method_exists($video, 'getFileName') ? $video->getFileName() : '';
+                            $vidMime = is_object($video) && method_exists($video, 'getMimeType') ? $video->getMimeType() : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($video->getFileId(), $chat, $tBot, array('ext' => 'mp4', 'file_name' => $vidName, 'mime_type' => $vidMime)));
                         } elseif ($message->getVideoNote()) {
                             $text = $this->processObject($message->getVideoNote()->getFileId(), $chat, $tBot, array('ext' => 'mp4'));
                         } elseif ($type === 'voice') {
@@ -282,7 +300,10 @@ class GenericmessageCommand extends SystemCommand
                         } elseif ($type === 'sticker') {
                             $text = $this->processObject($message->getSticker()->getFileId(), $chat, $tBot, array('ext' => 'webp'));
                         } elseif ($type === 'audio') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getAudio()->getFileId(), $chat, $tBot));
+                            $audio = $message->getAudio();
+                            $audName = is_object($audio) && method_exists($audio, 'getFileName') ? $audio->getFileName() : '';
+                            $audMime = is_object($audio) && method_exists($audio, 'getMimeType') ? $audio->getMimeType() : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($audio->getFileId(), $chat, $tBot, array('file_name' => $audName, 'mime_type' => $audMime)));
                         }
 
                         $ignoreMessage = false;

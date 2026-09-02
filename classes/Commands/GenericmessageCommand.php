@@ -280,18 +280,18 @@ class GenericmessageCommand extends SystemCommand
                             $text = $this->appendCaptionToFileEmbed($message, $this->processPhoto($chat, $message, $tBot));
                         } elseif ($type === 'animation') {
                             $animation = $message->getAnimation();
-                            $animName = is_object($animation) && method_exists($animation, 'getFileName') ? $animation->getFileName() : '';
-                            $animMime = is_object($animation) && method_exists($animation, 'getMimeType') ? $animation->getMimeType() : '';
+                            $animName = is_object($animation) ? (string)($animation->getProperty('file_name', '') ?: $animation->getFileName()) : '';
+                            $animMime = is_object($animation) ? (string)($animation->getProperty('mime_type', '') ?: $animation->getMimeType()) : '';
                             $text = $this->appendCaptionToFileEmbed($message, $this->processObject($animation->getFileId(), $chat, $tBot, array('ext' => $this->getAnimationExtension($message), 'file_name' => $animName, 'mime_type' => $animMime)));
                         } elseif ($type === 'document') {
                             $doc = $message->getDocument();
-                            $docName = is_object($doc) && method_exists($doc, 'getFileName') ? $doc->getFileName() : '';
-                            $docMime = is_object($doc) && method_exists($doc, 'getMimeType') ? $doc->getMimeType() : '';
+                            $docName = is_object($doc) ? (string)($doc->getProperty('file_name', '') ?: $doc->getFileName()) : '';
+                            $docMime = is_object($doc) ? (string)($doc->getProperty('mime_type', '') ?: $doc->getMimeType()) : '';
                             $text = $this->appendCaptionToFileEmbed($message, $this->processObject($doc->getFileId(), $chat, $tBot, array('file_name' => $docName, 'mime_type' => $docMime)));
                         } elseif ($type === 'video') {
                             $video = $message->getVideo();
-                            $vidName = is_object($video) && method_exists($video, 'getFileName') ? $video->getFileName() : '';
-                            $vidMime = is_object($video) && method_exists($video, 'getMimeType') ? $video->getMimeType() : '';
+                            $vidName = is_object($video) ? (string)($video->getProperty('file_name', '') ?: $video->getFileName()) : '';
+                            $vidMime = is_object($video) ? (string)($video->getProperty('mime_type', '') ?: $video->getMimeType()) : '';
                             $text = $this->appendCaptionToFileEmbed($message, $this->processObject($video->getFileId(), $chat, $tBot, array('ext' => 'mp4', 'file_name' => $vidName, 'mime_type' => $vidMime)));
                         } elseif ($message->getVideoNote()) {
                             $text = $this->processObject($message->getVideoNote()->getFileId(), $chat, $tBot, array('ext' => 'mp4'));
@@ -301,8 +301,8 @@ class GenericmessageCommand extends SystemCommand
                             $text = $this->processObject($message->getSticker()->getFileId(), $chat, $tBot, array('ext' => 'webp'));
                         } elseif ($type === 'audio') {
                             $audio = $message->getAudio();
-                            $audName = is_object($audio) && method_exists($audio, 'getFileName') ? $audio->getFileName() : '';
-                            $audMime = is_object($audio) && method_exists($audio, 'getMimeType') ? $audio->getMimeType() : '';
+                            $audName = is_object($audio) ? (string)($audio->getProperty('file_name', '') ?: $audio->getFileName()) : '';
+                            $audMime = is_object($audio) ? (string)($audio->getProperty('mime_type', '') ?: $audio->getMimeType()) : '';
                             $text = $this->appendCaptionToFileEmbed($message, $this->processObject($audio->getFileId(), $chat, $tBot, array('file_name' => $audName, 'mime_type' => $audMime)));
                         }
 

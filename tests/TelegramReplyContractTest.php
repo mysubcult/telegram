@@ -224,6 +224,17 @@ $shortHtml = $splitMethod->invoke($extension, [
 ]);
 expectTelegramContract(count($shortHtml) === 1 && $shortHtml[0]['text'] === '<i>short valid HTML</i>', 'short valid HTML must keep its markup');
 
+
+$ezcBase = __DIR__ . '/../../../ezcomponents/Base/src/base.php';
+if (is_file($ezcBase)) {
+    require_once $ezcBase;
+    spl_autoload_register(array('ezcBase','autoload'), true, false);
+    if (class_exists('erLhcoreClassSystem')) {
+        erLhcoreClassSystem::init();
+        ezcBaseInit::setCallback('ezcInitDatabaseInstance','erLhcoreClassLazyDatabaseConfiguration');
+    }
+}
+
 $vendorAutoload = __DIR__ . '/../../../lib/vendor/autoload.php';
 if (is_file($vendorAutoload)) {
     require_once $vendorAutoload;
@@ -329,5 +340,24 @@ $ctx = erLhcoreClassExtensionLhctelegram::getTelegramTopicContextForChat($mockTc
 expectTelegramContract($ctx === ['bot_id' => 2, 'group_chat_id' => '-100999'], 'topic context extraction must match');
 $ctxOp = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramTopicContextForChat($mockTchat);
 expectTelegramContract($ctxOp === ['bot_id' => 2, 'group_chat_id' => '-100999'], 'operator topic context extraction must match');
+
+
+// formatTelegramMessageText quote contract tests
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramMessageText('[quote=287986]цитата[/quote]ответ') === '<blockquote>цитата</blockquote>ответ', 'formatTelegramMessageText must format numeric BBCode quote as blockquote');
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramMessageText('[quote="287986"]цитата[/quote]ответ') === '<blockquote>цитата</blockquote>ответ', 'formatTelegramMessageText must format quoted numeric BBCode quote as blockquote');
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramMessageText('[quote]цитата[/quote]ответ') === '<blockquote>цитата</blockquote>ответ', 'formatTelegramMessageText must format plain BBCode quote as blockquote');
+
+// getTopicReplyId contract tests
+$mockMsgDirect = new \erLhcoreClassModelmsg();
+$mockMsgDirect->meta_msg_array = ['content' => ['reply_to' => ['telegram_message_id' => 9988]]];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTopicReplyId($mockMsgDirect, 1) === 9988, 'getTopicReplyId must return telegram_message_id');
+
+$mockMsgTopic = new \erLhcoreClassModelmsg();
+$mockMsgTopic->meta_msg_array = ['content' => ['reply_to' => ['tg_topic_msg_id' => 7755]]];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTopicReplyId($mockMsgTopic, 1) === 7755, 'getTopicReplyId must return tg_topic_msg_id');
+
+$mockMsgNonReply = new \erLhcoreClassModelmsg();
+$mockMsgNonReply->meta_msg_array = ['tg_topic_msg_id' => 6644];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTopicReplyId($mockMsgNonReply, 1) === null, 'getTopicReplyId must not return own tg_topic_msg_id when not replying');
 
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

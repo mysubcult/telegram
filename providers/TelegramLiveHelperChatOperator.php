@@ -828,6 +828,12 @@ class TelegramLiveHelperChatOperator {
         return null;
     }
 
+    public static function formatTelegramMessageText($messageText)
+    {
+        $formatted = \erLhcoreClassBBCodePlain::make_clickable($messageText, array('sender' => 0));
+        return preg_replace('#\[quote(?:="?[^"\]]*"?)?\](.*?)\[/quote\]#is', '<blockquote>$1</blockquote>', $formatted);
+    }
+
     public static function getTopicReplyId($msg, $chatId, $topicContext = array())
     {
         if (!($msg instanceof \erLhcoreClassModelmsg)) {
@@ -835,6 +841,12 @@ class TelegramLiveHelperChatOperator {
         }
 
         $meta = is_array($msg->meta_msg_array) ? $msg->meta_msg_array : array();
+        if (empty($meta) && !empty($msg->meta_msg)) {
+            $decoded = json_decode($msg->meta_msg, true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        }
 
         if (isset($meta['content']['reply_to']['db_msg_id']) && (int)$meta['content']['reply_to']['db_msg_id'] > 0) {
             $targetMsg = \erLhcoreClassModelmsg::fetch((int)$meta['content']['reply_to']['db_msg_id']);
@@ -855,6 +867,20 @@ class TelegramLiveHelperChatOperator {
             return (int)$meta['content']['reply_to']['tg_topic_msg_id'];
         }
 
+        if (isset($meta['content']['reply_to']['iwh_msg_id']) && $meta['content']['reply_to']['iwh_msg_id'] != '') {
+            $iwhId = (string)$meta['content']['reply_to']['iwh_msg_id'];
+            $targetMsg = \erLhcoreClassModelmsg::findOne([
+                'filter' => ['chat_id' => $chatId],
+                'customfilter' => ["`meta_msg` != '' AND JSON_VALID(`meta_msg`) AND (JSON_UNQUOTE(JSON_EXTRACT(meta_msg,'$.iwh_msg_id')) = " . \ezcDbInstance::get()->quote($iwhId) . " OR JSON_EXTRACT(meta_msg,'$.iwh_msg_id') = " . (is_numeric($iwhId) ? (int)$iwhId : \ezcDbInstance::get()->quote($iwhId)) . ")"]
+            ]);
+            if ($targetMsg instanceof \erLhcoreClassModelmsg && (int)$targetMsg->chat_id === (int)$chatId) {
+                $resolvedId = self::getStoredTopicMessageId($targetMsg, null, $topicContext);
+                if ($resolvedId !== null) {
+                    return $resolvedId;
+                }
+            }
+        }
+
         if (isset($meta['content']['quote']['id']) && (int)$meta['content']['quote']['id'] > 0) {
             $targetMsg = \erLhcoreClassModelmsg::fetch((int)$meta['content']['quote']['id']);
             if ($targetMsg instanceof \erLhcoreClassModelmsg && (int)$targetMsg->chat_id === (int)$chatId) {
@@ -865,12 +891,8 @@ class TelegramLiveHelperChatOperator {
             }
         }
 
-        if (isset($meta['tg_topic_msg_id']) && (int)$meta['tg_topic_msg_id'] > 0) {
-            return (int)$meta['tg_topic_msg_id'];
-        }
-
-        if (preg_match('/\\[quote=(\\d+)(?:[^\\s\\]]*)(?:\\s+id=([^\\s\\]]+))?[^\\]]*\\]/i', (string)$msg->msg, $matches)) {
-            $targetMsg = \erLhcoreClassModelmsg::fetch((int)$matches[1]);
+        if (preg_match('#\[quote="?([0-9]+)"?\]#is', (string)$msg->msg, $m)) {
+            $targetMsg = \erLhcoreClassModelmsg::fetch((int)$m[1]);
             if ($targetMsg instanceof \erLhcoreClassModelmsg && (int)$targetMsg->chat_id === (int)$chatId) {
                 $resolvedId = self::getStoredTopicMessageId($targetMsg, null, $topicContext);
                 if ($resolvedId !== null) {
@@ -897,6 +919,13 @@ class TelegramLiveHelperChatOperator {
         $db = \ezcDbInstance::get();
 
         foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($params['chat']->online_user_id > 0 ? ($params['chat']->online_user_id * -1) : $params['chat']->id), 'type' => 1]]) as $tchat) {
+
+            if ((int)$tchat->chat_id !== (int)$params['chat']->id) {
+                $tchat->chat_id = (int)$params['chat']->id;
+                $tchat->utime = time();
+                $tchat->updateThis(['update' => ['chat_id', 'utime']]);
+            }
+
 
             $db->beginTransaction();
             $tchat->syncAndLock('`last_msg_id`');
@@ -933,7 +962,7 @@ class TelegramLiveHelperChatOperator {
                         'chat_id' => $tchat->bot->group_chat_id,
                         'message_thread_id' => $tchat->tchat_id,
                         'parse_mode' => 'HTML',
-                        'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']: <i>' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']: ') . \erLhcoreClassBBCodePlain::make_clickable($messageText, array('sender' => 0)) . ($params['msg']->name_support != '' ? '</i>' : ''))
+                        'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']: <i>' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($messageText) . ($params['msg']->name_support != '' ? '</i>' : ''))
                     ];
 
                     if ($chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT) {
@@ -1116,14 +1145,19 @@ class TelegramLiveHelperChatOperator {
 
                 if (is_array($tChatData)) {
                     $tChat = \erLhcoreClassModelTelegramChat::fetch($tChatData['id']);
+                    $tChat->chat_id = $params['chat']->id;
+                    $tChat->utime = time();
+                    $tChat->updateThis(['update' => ['chat_id', 'utime']]);
                 } else {
                     $tChat = new \erLhcoreClassModelTelegramChat();
                     $tChat->bot_id = $bot->bot->id;
                     $tChat->chat_id_internal = $chatInternal;
+                    $tChat->chat_id = $params['chat']->id;
                     $tChat->type = 1;
+                    $tChat->ctime = time();
+                    $tChat->utime = time();
                     $tChat->saveThis();
                 }
-
                 $db->commit();
 
                 try {
@@ -1139,10 +1173,12 @@ class TelegramLiveHelperChatOperator {
                         'group_chat_id' => (string)$bot->bot->group_chat_id
                     );
 
+                    $topicTitle = mb_substr('[' . $params['chat']->department . '] ' . $params['chat']->nick . ' #' . $params['chat']->id . ($params['chat']->ip != '' ? ' | ' . $params['chat']->ip : '') . ($params['chat']->country_code != '' ? ' | ' . strtoupper($params['chat']->country_code) : '') . ($params['chat']->referrer != '' ? ' | ' . ltrim($params['chat']->referrer, '/') : '') . (is_object($params['chat']->online_user) && $params['chat']->online_user->page_title != '' ? ' | ' . $params['chat']->online_user->page_title : ''), 0, 128);
+
                     if ($tChat->tchat_id == null || $tChat->tchat_id == 0) {
                         $sendData = \Longman\TelegramBot\Request::send('createForumTopic', [
                             'chat_id' => $bot->bot->group_chat_id,
-                            'name' => mb_substr('[' . $params['chat']->department . '] ' . $params['chat']->nick . ' #' . $params['chat']->id . ($onlineUser !== false ? ($onlineUser->ip != '' ? ' | ' . $onlineUser->ip : '') . ($onlineUser->user_country_code != '' ? ' | ' . strtoupper($onlineUser->user_country_code) : '') . ($onlineUser->current_page != '' ? ' | '. ltrim($onlineUser->current_page,'/') : '') . ($onlineUser->page_title != '' ? ' | '.$onlineUser->page_title : '') : ''),0,128)
+                            'name' => $topicTitle
                         ]);
 
                         if ($sendData->isOk()) {
@@ -1163,11 +1199,40 @@ class TelegramLiveHelperChatOperator {
                         }
                     }
 
-                    $visitor = array();
+                    $previousChatMessages = '';
 
-                    $visitor[] = '👤 [<b>' . \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . '</b>] ' .
-                        ($params['chat']->ip != '' ? ' | ' . $params['chat']->ip : '') .
-                        ($onlineUser !== false ? ($onlineUser->user_country_code != '' ? ' | ' . strtoupper($onlineUser->user_country_code) : '') . ($onlineUser->current_page != '' ? ' | ' . $onlineUser->current_page : '') : '');
+                    if ($bot->bot->delete_on_close == 1 && $params['chat']->online_user_id > 0 && is_object($params['chat']->online_user) && is_object($params['chat']->online_user->previous_chat)) {
+                        $previousChatMessagesList = [];
+                        foreach (array_reverse(\erLhcoreClassModelmsg::getList(array('limit' => 15, 'sort' => 'id DESC', 'filternotin' => ['user_id' => [-1]], 'filter' => array('chat_id' => $params['chat']->online_user->previous_chat->id)))) as $botMessage) {
+                            if (empty($botMessage->msg)) {
+                                continue;
+                            }
+                            $previousChatMessagesList[] = trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($botMessage->msg) . ($botMessage->name_support != '' ? '</i>' : ''));
+                        }
+
+                        if (!empty($previousChatMessagesList)){
+                            $previousChatMessages = "\n├──Previous chat messages: \n" . implode("\n", $previousChatMessagesList);
+                        }
+                    }
+
+                    $additionalDataFormatted = '';
+                    if (isset($params['chat']->additional_data) && !empty($params['chat']->additional_data)) {
+                        $additionalData = json_decode($params['chat']->additional_data, true);
+                        if (is_array($additionalData) && !empty($additionalData)) {
+                            $additionalDataLines = [];
+                            foreach ($additionalData as $dataItem) {
+                                if (isset($dataItem['key']) && isset($dataItem['value']) && $dataItem['key'] !== '' && $dataItem['value'] !== '') {
+                                    $additionalDataLines[] = "├──" . $dataItem['key'] . ": " . $dataItem['value'];
+                                }
+                            }
+                            if (!empty($additionalDataLines)) {
+                                $additionalDataFormatted = "\n" . implode("\n", $additionalDataLines);
+                            }
+                        }
+                    }
+
+                    $visitor = array();
+                    $visitor[] = "├──New chat\n├──Department: " . ((string)$params['chat']->department) . "\n├──ID: " . $params['chat']->id . (isset($params['chat']->chat_variables_array['iwh_field']) ? "\n├──Username: @" . $params['chat']->chat_variables_array['iwh_field'] : '') . (isset($params['chat']->phone) && !empty($params['chat']->phone) ? "\n├──Phone: +" . $params['chat']->phone : '') .  "\n├──Nick: " . $params['chat']->nick .(isset($params['chat']->referrer) && !empty($params['chat']->referrer) ? "\n├──Referrer: " . ltrim($params['chat']->referrer,'/') : '') . (is_object($params['chat']->online_user) && $params['chat']->online_user->page_title != '' ? "\n├──Page title: " . $params['chat']->online_user->page_title : '') . (isset($params['chat']->ip) && !empty($params['chat']->ip) ? "\n├──IP: " . $params['chat']->ip  : '') . (isset($params['chat']->country_name) && !empty($params['chat']->country_name) ? "\n├──GEO: " . $params['chat']->country_name : '') . $additionalDataFormatted . $previousChatMessages . "\n└──Messages:";
 
                     // Collect all chat messages including bot
                     $initialTelegramFiles = array();
@@ -1181,7 +1246,7 @@ class TelegramLiveHelperChatOperator {
                         $messageText = self::stripTelegramFileEmbeds($botMessage->msg);
 
                         if ($messageText !== '' && empty($telegramFiles)) {
-                            $visitor[] = trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ') . \erLhcoreClassBBCodePlain::make_clickable($messageText, array('sender' => 0)) . ($botMessage->name_support != '' ? '</i>' : ''));
+                            $visitor[] = trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($messageText) . ($botMessage->name_support != '' ? '</i>' : ''));
                             $initialAggregateMessages[] = array('msg' => $botMessage, 'text' => $messageText);
                         }
 
@@ -1226,7 +1291,7 @@ class TelegramLiveHelperChatOperator {
                         if ($sendData->getErrorCode() == 400 && (str_contains($sendData->getDescription(), 'message thread not found') || str_contains($sendData->getDescription(), 'TOPIC_DELETED'))) {
                             $sendData = \Longman\TelegramBot\Request::send('createForumTopic', [
                                 'chat_id' => $bot->bot->group_chat_id,
-                                'name' => mb_substr('[' . $params['chat']->department . '] ' . $params['chat']->nick . ' #' . $params['chat']->id . ($onlineUser !== false ? ($onlineUser->ip != '' ? ' | ' . $onlineUser->ip : '') . ($onlineUser->user_country_code != '' ? ' | ' . strtoupper($onlineUser->user_country_code) : '') . ($onlineUser->current_page != '' ? ' | '. ltrim($onlineUser->current_page,'/') : '') . ($onlineUser->page_title != '' ? ' | '.$onlineUser->page_title : '') : ''),0,128)
+                                'name' => $topicTitle
                             ]);
 
                             if ($sendData->isOk()) {

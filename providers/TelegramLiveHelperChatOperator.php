@@ -1387,14 +1387,42 @@ class TelegramLiveHelperChatOperator {
         }
     }
 
+    /*
+     * Delete forum topic if configured
+     * */
     public static function closeChat($params)
     {
         foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($params['chat']->online_user_id > 0 ? ($params['chat']->online_user_id * -1) : $params['chat']->id), 'type' => 1]]) as $tchat) {
-            $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-            \Longman\TelegramBot\Request::send('closeForumTopic', [
-                'chat_id' => $tchat->bot->group_chat_id,
-                'message_thread_id' => $tchat->tchat_id
-            ]);
+
+            if ($tchat->bot->bot_client == 0 || $tchat->bot->delete_on_close == 0) {
+                continue;
+            }
+
+            if ($tchat->tchat_id > 0) {
+
+                $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
+
+                $sendData = \Longman\TelegramBot\Request::send('deleteForumTopic', [
+                    'chat_id' => $tchat->bot->group_chat_id,
+                    'message_thread_id' => $tchat->tchat_id
+                ]);
+
+                $tchat->tchat_id = 0;
+                $tchat->updateThis(['update' => ['tchat_id']]);
+
+                if (!$sendData->isOk()) {
+                    \erLhcoreClassLog::write('deleteForumTopic ['.$sendData->getErrorCode().']'. $sendData->getDescription(),
+                        \ezcLog::SUCCESS_AUDIT,
+                        array(
+                            'source' => 'lhc',
+                            'category' => 'telegram_exception',
+                            'line' => __LINE__,
+                            'file' => __FILE__,
+                            'object_id' => $params['chat']->id
+                        )
+                    );
+                }
+            }
         }
     }
 }

@@ -256,6 +256,12 @@ class TelegramLiveHelperChatOperator {
                     $multipartFilePath = $file->file_path_server;
                     $multipartFileField = $field;
                 }
+                $fileHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
+                if (is_resource($fileHandle)) {
+                    $data[$field] = $fileHandle;
+                } else {
+                    $data[$field] = self::getTelegramChatFileUrl($file);
+                }
             } else {
                 $data[$field] = self::getTelegramChatFileUrl($file);
             }
@@ -316,55 +322,61 @@ class TelegramLiveHelperChatOperator {
 
     public static function sendTelegramRequest($method, array $data, $multipartFilePath = '', $multipartFileField = '')
     {
-        $allowMessageSplit = ($method === 'sendMessage');
+        $multipartFilePath = (string)$multipartFilePath;
+        $multipartFileField = (string)$multipartFileField;
+        $allowMessageSplit = ($method === 'sendMessage' && $multipartFilePath === '' && $multipartFileField === '');
+        self::$lastTelegramSendResponses = array();
 
-        if ($multipartFilePath !== '' && $multipartFileField !== '' && file_exists($multipartFilePath)) {
+        if ($multipartFilePath !== '' && $multipartFileField !== '' && (!isset($data[$multipartFileField]) || !is_resource($data[$multipartFileField])) && file_exists($multipartFilePath)) {
             $fileHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
             if (is_resource($fileHandle)) {
                 $data[$multipartFileField] = $fileHandle;
             }
         }
 
-        $sendData = self::sendTelegramRequestOnce($method, $data, $allowMessageSplit);
-        self::closeTelegramResources($data);
-
-        // Retry without reply if the message replied to was deleted
-        if (!$allowMessageSplit && self::hasTelegramStaleReplyResponse($sendData) && isset($data['reply_to_message_id'])) {
-            unset($data['reply_to_message_id']);
-            self::$lastTelegramSendResponses = array();
-
-            if ($multipartFilePath !== '' && $multipartFileField !== '' && file_exists($multipartFilePath)) {
-                $retryHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
-                if (is_resource($retryHandle)) {
-                    $data[$multipartFileField] = $retryHandle;
-                }
-            } else {
-                self::rewindTelegramResources($data);
-            }
-
+        try {
             $sendData = self::sendTelegramRequestOnce($method, $data, $allowMessageSplit);
+        } catch (\Throwable $e) {
             self::closeTelegramResources($data);
+            self::$lastTelegramSendResponses = array();
+            \erLhcoreClassLog::write('Telegram request exception ' . $e->getMessage(), \ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__));
+            return new \Longman\TelegramBot\Entities\ServerResponse(array('ok' => false, 'error_code' => 500, 'description' => 'Telegram request failed'));
         }
 
+        if (!$allowMessageSplit && self::hasTelegramStaleReplyResponse($sendData) && isset($data['reply_to_message_id'])) {
+            unset($data['reply_to_message_id']);
+            try {
+                if ($multipartFilePath !== '' && $multipartFileField !== '') {
+                    if (isset($data[$multipartFileField]) && is_resource($data[$multipartFileField])) {
+                        @fclose($data[$multipartFileField]);
+                    }
+                    $data[$multipartFileField] = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
+                } else {
+                    self::rewindTelegramResources($data);
+                }
+                $sendData = self::sendTelegramRequestOnce($method, $data, $allowMessageSplit);
+            } catch (\Throwable $e) {
+                self::closeTelegramResources($data);
+                self::$lastTelegramSendResponses = array();
+                \erLhcoreClassLog::write('Telegram reply fallback exception ' . $e->getMessage(), \ezcLog::SUCCESS_AUDIT, array('source' => 'lhc', 'category' => 'telegram_exception', 'line' => __LINE__, 'file' => __FILE__));
+                return new \Longman\TelegramBot\Entities\ServerResponse(array('ok' => false, 'error_code' => 500, 'description' => 'Telegram reply fallback failed'));
+            }
+        }
+
+        self::closeTelegramResources($data);
         return $sendData;
     }
 
     public static function sendTelegramRequestOnce($method, array &$data, $allowMessageSplit = false)
     {
+        self::rewindTelegramResources($data);
+
         if ($method === 'sendMessage' && $allowMessageSplit) {
             return self::sendTelegramMessageWithSplit($data);
         }
 
         $sendData = \Longman\TelegramBot\Request::send($method, $data);
         self::$lastTelegramSendResponses = array($sendData);
-
-        if (self::shouldRetryTelegramWithoutReply($sendData) && isset($data['reply_to_message_id'])) {
-            unset($data['reply_to_message_id']);
-            self::rewindTelegramResources($data);
-            $sendData = \Longman\TelegramBot\Request::send($method, $data);
-            self::$lastTelegramSendResponses = array($sendData);
-        }
-
         return $sendData;
     }
 
@@ -573,19 +585,26 @@ class TelegramLiveHelperChatOperator {
 
     public static function getTelegramSendMessageIds($sendData)
     {
-        $responses = !empty(self::$lastTelegramSendResponses) ? self::$lastTelegramSendResponses : array($sendData);
+        $responses = (!empty(self::$lastTelegramSendResponses) && in_array($sendData, self::$lastTelegramSendResponses, true))
+            ? self::$lastTelegramSendResponses
+            : array($sendData);
         $messageIds = array();
 
         foreach ($responses as $response) {
-            if (is_object($response) && method_exists($response, 'isOk') && $response->isOk() && method_exists($response, 'getResult')) {
-                $result = $response->getResult();
-                if (is_object($result) && method_exists($result, 'getMessageId')) {
-                    $id = (int)$result->getMessageId();
-                    if ($id > 0) {
-                        $messageIds[] = $id;
+            if (is_object($response) && method_exists($response, 'isOk') && $response->isOk()) {
+                $result = is_callable(array($response, 'getResult')) ? $response->getResult() : (method_exists($response, 'getProperty') ? $response->getProperty('result') : null);
+                $msgId = 0;
+                if (is_object($result)) {
+                    if (is_callable(array($result, 'getMessageId'))) {
+                        $msgId = (int)$result->getMessageId();
+                    } elseif (method_exists($result, 'getProperty')) {
+                        $msgId = (int)$result->getProperty('message_id');
                     }
-                } elseif (is_array($result) && isset($result['message_id']) && (int)$result['message_id'] > 0) {
-                    $messageIds[] = (int)$result['message_id'];
+                } elseif (is_array($result) && isset($result['message_id'])) {
+                    $msgId = (int)$result['message_id'];
+                }
+                if ($msgId > 0) {
+                    $messageIds[] = $msgId;
                 }
             }
         }

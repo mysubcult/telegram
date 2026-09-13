@@ -676,7 +676,7 @@ class TelegramLiveHelperChatOperator {
             }
             $meta['tg_topic_msg_map'] = $topicMap;
 
-            $namespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespaceFromContext($topicContext);
+            $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
             if ($namespace !== null) {
                 if (!isset($meta['tg_topic_msg_contexts']) || !is_array($meta['tg_topic_msg_contexts'])) {
                     $meta['tg_topic_msg_contexts'] = array();
@@ -744,6 +744,30 @@ class TelegramLiveHelperChatOperator {
         ), $topicContext);
     }
 
+    public static function getTelegramTopicContextForChat($tchat)
+    {
+        if (!is_object($tchat) || !isset($tchat->bot_id) || !is_object($tchat->bot)) {
+            return array();
+        }
+
+        return array(
+            'bot_id' => (int)$tchat->bot_id,
+            'group_chat_id' => (string)$tchat->bot->group_chat_id
+        );
+    }
+
+    public static function getTelegramTopicNamespaceFromContext($topicContext)
+    {
+        if (!is_array($topicContext)) {
+            return '';
+        }
+
+        $botId = isset($topicContext['bot_id']) ? (int)$topicContext['bot_id'] : 0;
+        $groupChatId = isset($topicContext['group_chat_id']) ? (string)$topicContext['group_chat_id'] : '';
+
+        return \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespace($botId, $groupChatId);
+    }
+
     public static function getStoredTopicMessageId($msg, $preferredId = null, $topicContext = array())
     {
         if (!($msg instanceof \erLhcoreClassModelmsg)) {
@@ -758,7 +782,7 @@ class TelegramLiveHelperChatOperator {
             }
         }
 
-        $namespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespaceFromContext($topicContext);
+        $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
         if ($namespace !== null && isset($meta['tg_topic_msg_contexts'][$namespace]) && is_array($meta['tg_topic_msg_contexts'][$namespace])) {
             $context = $meta['tg_topic_msg_contexts'][$namespace];
             $contextIds = isset($context['ids']) && is_array($context['ids']) ? array_filter(array_map('intval', $context['ids'])) : array();
@@ -883,7 +907,7 @@ class TelegramLiveHelperChatOperator {
             }
 
             $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-            $topicContext = \erLhcoreClassExtensionLhctelegram::getTelegramTopicContextForChat($tchat);
+            $topicContext = self::getTelegramTopicContextForChat($tchat);
 
             if ($params['msg']->id > $tchat->last_msg_id) {
 
@@ -996,7 +1020,7 @@ class TelegramLiveHelperChatOperator {
             }
 
             $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-            $topicContext = \erLhcoreClassExtensionLhctelegram::getTelegramTopicContextForChat($tchat);
+            $topicContext = self::getTelegramTopicContextForChat($tchat);
 
             $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $chat->id), 'filtergt' => array('id' => $params['last_msg_id'])));
             foreach ($botMessages as $botMessage) {

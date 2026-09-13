@@ -271,7 +271,7 @@ class erLhcoreClassExtensionLhctelegram
         return array();
     }
 
-    private static function getTelegramEntityProperty($entity, $property)
+    public static function getTelegramEntityProperty($entity, $property)
     {
         if (!is_object($entity)) {
             return null;
@@ -293,7 +293,7 @@ class erLhcoreClassExtensionLhctelegram
         }
     }
 
-    private static function getTelegramQuoteText($quote)
+    public static function getTelegramQuoteText($quote)
     {
         if (is_array($quote)) {
             return trim((string)($quote['text'] ?? ''));
@@ -435,7 +435,7 @@ class erLhcoreClassExtensionLhctelegram
             . '_chat_' . $groupSign . '_' . ($groupDigits !== '' ? $groupDigits : '0');
     }
 
-    private static function getTelegramTopicNamespaceFromContext($topicContext)
+    public static function getTelegramTopicNamespaceFromContext($topicContext)
     {
         if (is_string($topicContext) && preg_match('/^bot_[0-9]+_chat_[np]_[0-9]+$/', $topicContext)) {
             return $topicContext;
@@ -456,7 +456,7 @@ class erLhcoreClassExtensionLhctelegram
         return '';
     }
 
-    private function getTelegramTopicContextForChat($tchat)
+    public static function getTelegramTopicContextForChat($tchat)
     {
         if (!is_object($tchat) || !isset($tchat->bot_id) || !is_object($tchat->bot)) {
             return array();
@@ -516,7 +516,7 @@ class erLhcoreClassExtensionLhctelegram
         return self::normalizeStoredTelegramMessageText($msg->msg);
     }
 
-    private function getTelegramFileCaption($msg, $chat, $file, $messageText = null)
+    public static function getTelegramFileCaption($msg, $chat, $file, $messageText = null)
     {
         $sender = $msg->name_support != '' ? '🤖 [' . $msg->name_support . ']' : '👤 [' . $chat->nick . ']';
         $messageText = $messageText === null ? $this->stripTelegramFileEmbeds($msg->msg) : trim((string)$messageText);
@@ -534,13 +534,13 @@ class erLhcoreClassExtensionLhctelegram
         return htmlspecialchars(mb_substr($caption, 0, 900), ENT_QUOTES, 'UTF-8');
     }
 
-    private static function normalizeStoredTelegramMessageText($text)
+    public static function normalizeStoredTelegramMessageText($text)
     {
         $text = html_entity_decode((string)$text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return trim(preg_replace('/\[file=\d+_[a-z0-9]+\]/i', '', $text));
     }
 
-    private function isMeaningfulTelegramUploadName($file)
+    public static function isMeaningfulTelegramUploadName($file)
     {
         $uploadName = trim((string)$file->upload_name);
 

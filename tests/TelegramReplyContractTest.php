@@ -318,4 +318,16 @@ if (class_exists('\\Longman\\TelegramBot\\Entities\\ServerResponse')) {
     expectTelegramContract($extractedIds === [182537], 'getTelegramSendMessageIds must extract message_id from ServerResponse');
 }
 
+
+expectTelegramContract(is_callable('erLhcoreClassExtensionLhctelegram::getTelegramTopicContextForChat'), 'getTelegramTopicContextForChat must be callable');
+expectTelegramContract(is_callable('LiveHelperChatExtension\\lhctelegram\\providers\\TelegramLiveHelperChatOperator::getTelegramTopicContextForChat'), 'Operator getTelegramTopicContextForChat must be callable');
+expectTelegramContract(is_callable('erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespaceFromContext'), 'getTelegramTopicNamespaceFromContext must be callable');
+expectTelegramContract(is_callable('LiveHelperChatExtension\\lhctelegram\\providers\\TelegramLiveHelperChatOperator::getTelegramTopicNamespaceFromContext'), 'Operator getTelegramTopicNamespaceFromContext must be callable');
+
+$mockTchat = (object)['bot_id' => 2, 'bot' => (object)['group_chat_id' => '-100999']];
+$ctx = erLhcoreClassExtensionLhctelegram::getTelegramTopicContextForChat($mockTchat);
+expectTelegramContract($ctx === ['bot_id' => 2, 'group_chat_id' => '-100999'], 'topic context extraction must match');
+$ctxOp = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramTopicContextForChat($mockTchat);
+expectTelegramContract($ctxOp === ['bot_id' => 2, 'group_chat_id' => '-100999'], 'operator topic context extraction must match');
+
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

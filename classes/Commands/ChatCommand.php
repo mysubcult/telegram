@@ -74,6 +74,10 @@ class ChatCommand extends UserCommand
 
             foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['bot_id' => $tBot->id, 'tchat_id' => $message->getMessageThreadId(), 'type' => 1]]) as $tchat) {
 
+                if (!\erLhcoreClassExtensionLhctelegram::isTelegramForumChatMessage($tchat, $chat_id)) {
+                    continue;
+                }
+
                $chat = $tchat->chat;
 
                 if (!($chat instanceof \erLhcoreClassModelChat)) {

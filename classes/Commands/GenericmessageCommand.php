@@ -95,11 +95,20 @@ class GenericmessageCommand extends SystemCommand
                 );
 
                 $partsNames = explode('/',$filePath);
-                $uploadName = array_pop($partsNames);
+                $fallbackUploadName = array_pop($partsNames);
+                $uploadName = (!empty($params['file_name'])) ? $params['file_name'] : $fallbackUploadName;
+
+                if (!empty($params['mime_type'])) {
+                    $mimeTypeResolved = $params['mime_type'];
+                } elseif (isset($mimeTypes[$ext])) {
+                    $mimeTypeResolved = $mimeTypes[$ext];
+                } else {
+                    $mimeTypeResolved = 'application/octet-stream';
+                }
 
                 $fileUpload = new \erLhcoreClassModelChatFile();
                 $fileUpload->size = $photo_file->getFileSize();
-                $fileUpload->type = isset($mimeTypes[$ext]) ? $mimeTypes[$ext] : 'application/octet-stream';
+                $fileUpload->type = $mimeTypeResolved;
                 $fileUpload->name = md5($filePath . time() . rand(0,100));
                 $fileUpload->date = time();
                 $fileUpload->user_id = 0;
@@ -253,18 +262,37 @@ class GenericmessageCommand extends SystemCommand
 
                 foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['bot_id' => $tBot->id, 'tchat_id' => $message->getMessageThreadId(), 'type' => 1]]) as $tchat) {
 
+                    // Telegram message/thread IDs are only unique within one chat.
+                    if (!\erLhcoreClassExtensionLhctelegram::isTelegramForumChatMessage($tchat, $chat_id)) {
+                        continue;
+                    }
+
                     $chat = $tchat->chat;
 
                     if ($chat instanceof \erLhcoreClassModelChat) {
+                        $topicContext = array(
+                            'bot_id' => (int)$tBot->id,
+                            'group_chat_id' => (string)$chat_id
+                        );
+                        $topicNamespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespace($topicContext['bot_id'], $topicContext['group_chat_id']);
 
                         if ($type === 'photo') {
                             $text = $this->appendCaptionToFileEmbed($message, $this->processPhoto($chat, $message, $tBot));
                         } elseif ($type === 'animation') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getAnimation()->getFileId(), $chat, $tBot, array('ext' => $this->getAnimationExtension($message))));
+                            $animation = $message->getAnimation();
+                            $animName = is_object($animation) ? (string)($animation->getProperty('file_name', '') ?: $animation->getFileName()) : '';
+                            $animMime = is_object($animation) ? (string)($animation->getProperty('mime_type', '') ?: $animation->getMimeType()) : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($animation->getFileId(), $chat, $tBot, array('ext' => $this->getAnimationExtension($message), 'file_name' => $animName, 'mime_type' => $animMime)));
                         } elseif ($type === 'document') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getDocument()->getFileId(), $chat, $tBot));
+                            $doc = $message->getDocument();
+                            $docName = is_object($doc) ? (string)($doc->getProperty('file_name', '') ?: $doc->getFileName()) : '';
+                            $docMime = is_object($doc) ? (string)($doc->getProperty('mime_type', '') ?: $doc->getMimeType()) : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($doc->getFileId(), $chat, $tBot, array('file_name' => $docName, 'mime_type' => $docMime)));
                         } elseif ($type === 'video') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getVideo()->getFileId(), $chat, $tBot, array('ext' => 'mp4')));
+                            $video = $message->getVideo();
+                            $vidName = is_object($video) ? (string)($video->getProperty('file_name', '') ?: $video->getFileName()) : '';
+                            $vidMime = is_object($video) ? (string)($video->getProperty('mime_type', '') ?: $video->getMimeType()) : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($video->getFileId(), $chat, $tBot, array('ext' => 'mp4', 'file_name' => $vidName, 'mime_type' => $vidMime)));
                         } elseif ($message->getVideoNote()) {
                             $text = $this->processObject($message->getVideoNote()->getFileId(), $chat, $tBot, array('ext' => 'mp4'));
                         } elseif ($type === 'voice') {
@@ -272,7 +300,10 @@ class GenericmessageCommand extends SystemCommand
                         } elseif ($type === 'sticker') {
                             $text = $this->processObject($message->getSticker()->getFileId(), $chat, $tBot, array('ext' => 'webp'));
                         } elseif ($type === 'audio') {
-                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($message->getAudio()->getFileId(), $chat, $tBot));
+                            $audio = $message->getAudio();
+                            $audName = is_object($audio) ? (string)($audio->getProperty('file_name', '') ?: $audio->getFileName()) : '';
+                            $audMime = is_object($audio) ? (string)($audio->getProperty('mime_type', '') ?: $audio->getMimeType()) : '';
+                            $text = $this->appendCaptionToFileEmbed($message, $this->processObject($audio->getFileId(), $chat, $tBot, array('file_name' => $audName, 'mime_type' => $audMime)));
                         }
 
                         $ignoreMessage = false;
@@ -341,7 +372,105 @@ class GenericmessageCommand extends SystemCommand
 
                         if ($ignoreMessage == false) {
                             $msg = new \erLhcoreClassModelmsg();
-                            $msg->msg = $text;
+                            $msgText = $text;
+                            $metaMsg = [];
+
+                            $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
+                            $isExplicitReply = !empty($replyData['is_explicit_reply']) && (int)($replyData['reply_message_id'] ?? 0) > 0;
+                            $telegramMessageId = (int)($replyData['message_id'] ?? 0);
+
+                            if ($telegramMessageId > 0) {
+                                $metaMsg['tg_topic_msg_id'] = $telegramMessageId;
+                                $metaMsg['tg_topic_msg_contexts'] = array(
+                                    $topicNamespace => array(
+                                        'ids' => array($telegramMessageId),
+                                        'latest_id' => $telegramMessageId,
+                                        'bot_id' => $topicContext['bot_id'],
+                                        'group_chat_id' => $topicContext['group_chat_id'],
+                                        'map' => array(
+                                            (string)$telegramMessageId => array(
+                                                'text' => \erLhcoreClassExtensionLhctelegram::stripTelegramFileEmbedsText($text),
+                                                'kind' => 'text'
+                                            )
+                                        )
+                                    )
+                                );
+                            }
+
+                            if ($isExplicitReply) {
+                                $replyTopicMsgId = (int)$replyData['reply_message_id'];
+                                $db = \ezcDbInstance::get();
+                                $topicMessageIdsPath = '$.tg_topic_msg_contexts.' . $topicNamespace . '.ids';
+                                $replyMsg = \erLhcoreClassModelmsg::findOne([
+                                    'filter' => ['chat_id' => $chat->id],
+                                    'customfilter' => [
+                                        '`meta_msg` != \'\' AND JSON_VALID(`meta_msg`) AND JSON_CONTAINS(JSON_EXTRACT(meta_msg, ' . $db->quote($topicMessageIdsPath) . '), ' . $db->quote(json_encode(array($replyTopicMsgId))) . ')'
+                                    ]
+                                ]);
+
+                                if (!($replyMsg instanceof \erLhcoreClassModelmsg)) {
+                                    $replyMsg = \erLhcoreClassModelmsg::findOne([
+                                        'filter' => ['chat_id' => $chat->id],
+                                        'customfilter' => [
+                                            'meta_msg != \'\' AND JSON_VALID(meta_msg) AND (JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId . ' OR JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\'))'
+                                        ]
+                                    ]);
+                                }
+
+                                if ($replyMsg instanceof \erLhcoreClassModelmsg) {
+                                    $replyMsgMeta = is_array($replyMsg->meta_msg_array) ? $replyMsg->meta_msg_array : array();
+                                    if (empty($replyMsgMeta) && isset($replyMsg->meta_msg) && is_string($replyMsg->meta_msg)) {
+                                        $decodedReplyMeta = json_decode($replyMsg->meta_msg, true);
+                                        if (is_array($decodedReplyMeta)) {
+                                            $replyMsgMeta = $decodedReplyMeta;
+                                        }
+                                    }
+                                    $replyExternalId = trim((string)($replyMsgMeta['iwh_msg_id'] ?? ''));
+                                    $replyReference = \erLhcoreClassExtensionLhctelegram::buildTelegramReplyReference(
+                                        $replyMsg->id,
+                                        $replyTopicMsgId,
+                                        $replyExternalId
+                                    );
+
+                                    // Keep the local quote/reply target even when the
+                                    // original LHC message has no external visitor ID.
+                                    // The REST core only consumes iwh_msg_id from its
+                                    // numeric quote marker; this metadata is consumed
+                                    // by the Telegram extension for direct topic replies.
+                                    $metaMsg['content']['reply_to'] = $replyReference;
+                                    $quoteText = trim((string)($replyData['quote_text'] ?? ''));
+                                    if ($quoteText === '') {
+                                        $quoteText = \erLhcoreClassExtensionLhctelegram::getStoredTelegramMessageText($replyMsg, $replyTopicMsgId, $topicContext);
+                                    }
+                                    if ($quoteText === '') {
+                                        $quoteText = html_entity_decode(
+                                            preg_replace('/\[file=\d+_[a-z0-9]+\]/i', '', (string)$replyMsg->msg),
+                                            ENT_QUOTES | ENT_HTML5,
+                                            'UTF-8'
+                                        );
+                                        $quoteText = trim($quoteText);
+                                    }
+                                    $quoteText = \erLhcoreClassExtensionLhctelegram::normalizeTelegramQuoteText($quoteText);
+                                    $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
+                                    $msgText = \erLhcoreClassExtensionLhctelegram::formatTelegramQuotedText(
+                                        $msgText,
+                                        $replyMsg->id,
+                                        $quoteText,
+                                        $replyExternalId
+                                    );
+                                    $metaMsg['content']['quote'] = [
+                                        'id' => $replyMsg->id,
+                                        'text' => $quoteText,
+                                        'nick' => $replyNick
+                                    ];
+                                }
+                            }
+
+                            $msg->msg = $msgText;
+                            if (!empty($metaMsg)) {
+                                $msg->meta_msg = json_encode($metaMsg);
+                                $msg->meta_msg_array = $metaMsg;
+                            }
                             $msg->chat_id = $chat->id;
                             $msg->user_id = $messageUserId;
                             $msg->time = time();

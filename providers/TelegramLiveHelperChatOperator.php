@@ -1156,6 +1156,7 @@ class TelegramLiveHelperChatOperator {
                     $tChat->type = 1;
                     $tChat->ctime = time();
                     $tChat->utime = time();
+                    $tChat->tchat_id = 0;
                     $tChat->saveThis();
                 }
                 $db->commit();

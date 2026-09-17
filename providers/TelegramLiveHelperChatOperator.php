@@ -1360,6 +1360,7 @@ class TelegramLiveHelperChatOperator {
                             ));
                         }
                     }
+
                 } catch (\Exception $e) {
                     \erLhcoreClassLog::write($e->getMessage(),
                         \ezcLog::SUCCESS_AUDIT,

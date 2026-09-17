@@ -56,6 +56,7 @@ class erLhcoreClassModelTelegramChat
     
     public $bot_id = null;
 
+    // 0 - no topic created yet. Column does not accept NULL values
     public $tchat_id = 0;
     
     public $chat_id = null;

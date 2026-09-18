@@ -1194,6 +1194,7 @@ class TelegramLiveHelperChatOperator {
 
             $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
             $topicContext = self::getTelegramTopicContextForChat($tchat);
+            $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
 
             if ($params['msg']->id > $tchat->last_msg_id) {
 
@@ -1436,6 +1437,7 @@ class TelegramLiveHelperChatOperator {
 
             $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
             $topicContext = self::getTelegramTopicContextForChat($tchat);
+            $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
 
             $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $chat->id), 'filtergt' => array('id' => $params['last_msg_id'])));
             foreach ($botMessages as $botMessage) {

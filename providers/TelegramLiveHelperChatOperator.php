@@ -1428,6 +1428,7 @@ class TelegramLiveHelperChatOperator {
     public static function triggerClicked($params)
     {
         $chat = $params['chat'];
+        $db = \ezcDbInstance::get();
 
         foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($params['chat']->online_user_id > 0 ? ($params['chat']->online_user_id * -1) : $params['chat']->id), 'type' => 1]]) as $tchat) {
 

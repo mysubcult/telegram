@@ -360,4 +360,89 @@ $mockMsgNonReply = new \erLhcoreClassModelmsg();
 $mockMsgNonReply->meta_msg_array = ['tg_topic_msg_id' => 6644];
 expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTopicReplyId($mockMsgNonReply, 1) === null, 'getTopicReplyId must not return own tg_topic_msg_id when not replying');
 
+
+// formatTelegramFileSize contract tests
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(500) === '500 Б', 'formatTelegramFileSize bytes');
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(2048) === '2 КБ' || \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(2048) === '2.0 КБ', 'formatTelegramFileSize KB');
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(112855947) === '107.6 МБ', 'formatTelegramFileSize MB');
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(2147483648) === '2.0 ГБ' || \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramFileSize(2147483648) === '2 ГБ', 'formatTelegramFileSize GB');
+
+// getTelegramFileIcon contract tests
+$mockVideo = (object)['extension' => 'mp4', 'type' => 'video/mp4'];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramFileIcon($mockVideo) === '🎥', 'getTelegramFileIcon video');
+$mockImage = (object)['extension' => 'png', 'type' => 'image/png'];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramFileIcon($mockImage) === '🖼', 'getTelegramFileIcon image');
+$mockZip = (object)['extension' => 'zip', 'type' => 'application/zip'];
+expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramFileIcon($mockZip) === '📦', 'getTelegramFileIcon zip');
+
+// formatFailedTelegramFiles contract tests
+$mockFailFile = (object)[
+    'id' => 9002,
+    'security_hash' => 'c04ccba0dcf25a797b1382fb219f6b72',
+    'hash' => 'dummy',
+    'chat_id' => 24869,
+    'name' => 'testvideo',
+    'upload_name' => 'myvideo.mp4',
+    'extension' => 'mp4',
+    'size' => 112855947,
+    'type' => 'video/mp4',
+    'file_path_server' => '/tmp/dummy'
+];
+$failedResult = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatFailedTelegramFiles(
+    ['[file=9002_c04ccba0dcf25a797b1382fb219f6b72]'],
+    [['embed' => '[file=9002_c04ccba0dcf25a797b1382fb219f6b72]', 'file' => $mockFailFile]]
+);
+expectTelegramContract(strpos($failedResult, '[file=') === false, 'formatFailedTelegramFiles must not output raw BBCode');
+expectTelegramContract(strpos($failedResult, 'myvideo.mp4') !== false, 'formatFailedTelegramFiles must include filename');
+expectTelegramContract(strpos($failedResult, '107.6 МБ') !== false, 'formatFailedTelegramFiles must include formatted size');
+expectTelegramContract(strpos($failedResult, 'href=') !== false, 'formatFailedTelegramFiles must include clickable link');
+
+// Oversized file dispatch via sendTelegramChatFile
+$oversizedFixture = tempnam(sys_get_temp_dir(), 'tg_oversized_');
+// Create a sparse file or mock oversized
+$mockOversizedFile = (object)[
+    'id' => 9002,
+    'security_hash' => 'c04ccba0dcf25a797b1382fb219f6b72',
+    'hash' => 'dummy',
+    'chat_id' => 24869,
+    'name' => '98124cdf4fb0498b8b04f517c12ba2a5',
+    'upload_name' => '',
+    'extension' => 'mp4',
+    'size' => 112855947,
+    'type' => 'video/mp4',
+    'file_path_server' => $oversizedFixture
+];
+file_put_contents($oversizedFixture, 'test');
+// Truncate to 55 MB to test > 50MB
+$fp = fopen($oversizedFixture, 'r+');
+ftruncate($fp, 55000000);
+fclose($fp);
+
+$mockTchatBot = (object)[
+    'bot' => (object)['group_chat_id' => -1001946886605],
+    'tchat_id' => 182943
+];
+$sentRequests = [];
+$mockHandler = function ($request, $options) use (&$sentRequests) {
+    $sentRequests[] = [
+        'uri' => (string)$request->getUri(),
+        'body' => $request->getBody()->getContents()
+    ];
+    return \GuzzleHttp\Promise\Create::promiseFor(new \GuzzleHttp\Psr7\Response(200, [], '{"ok":true,"result":{"message_id":999,"date":1,"chat":{"id":-100}}}'));
+};
+\Longman\TelegramBot\Request::setClient(new \GuzzleHttp\Client(['handler' => $mockHandler]));
+
+$resOversized = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::sendTelegramChatFile(
+    $mockTchatBot,
+    ['file' => $mockOversizedFile],
+    '👤 [Вадим]:'
+);
+expectTelegramContract($resOversized === 999, 'sendTelegramChatFile for oversized file must succeed via link message');
+expectTelegramContract(count($sentRequests) === 1, 'oversized file must make exactly one sendMessage request');
+expectTelegramContract(strpos($sentRequests[0]['uri'], 'sendMessage') !== false, 'oversized file must use sendMessage action, not sendVideo/sendDocument');
+expectTelegramContract(strpos($sentRequests[0]['body'], '50') !== false, 'oversized file must mention 50 MB limit');
+expectTelegramContract(strpos($sentRequests[0]['body'], '98124cdf4fb0498b8b04f517c12ba2a5.mp4') !== false, 'oversized file must include safe filename');
+
+unlink($oversizedFixture);
+
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

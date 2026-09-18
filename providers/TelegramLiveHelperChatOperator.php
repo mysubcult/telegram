@@ -180,13 +180,155 @@ class TelegramLiveHelperChatOperator {
     {
         $URLHash = '';
 
-        if ($file->chat_id > 0) {
+        if (isset($file->chat_id) && $file->chat_id > 0) {
             $tsHash = time();
-            $temporaryHash = sha1($file->id . '_' . $file->hash . '_' . $tsHash . '_' . \erConfigClassLhConfig::getInstance()->getSetting('site', 'secrethash'));
+            $secretHash = '';
+            try {
+                $secretHash = (string)\erConfigClassLhConfig::getInstance()->getSetting('site', 'secrethash');
+            } catch (\Throwable $e) {
+                $secretHash = '';
+            }
+            $fileHash = isset($file->hash) ? (string)$file->hash : '';
+            $fileId = isset($file->id) ? (int)$file->id : 0;
+            $temporaryHash = sha1($fileId . '_' . $fileHash . '_' . $tsHash . '_' . $secretHash);
             $URLHash = "/(vhash)/{$temporaryHash}/(vts)/{$tsHash}";
         }
 
-        return \erLhcoreClassSystem::getHost() . \erLhcoreClassDesign::baseurldirect('file/downloadfile') . "/{$file->id}/{$file->security_hash}{$URLHash}";
+        $host = '';
+        try {
+            $host = (string)\erLhcoreClassSystem::getHost();
+        } catch (\Throwable $e) {
+            $host = '';
+        }
+
+        $baseUri = '/index.php/file/downloadfile';
+        try {
+            $baseUri = (string)\erLhcoreClassDesign::baseurldirect('file/downloadfile');
+        } catch (\Throwable $e) {
+            $baseUri = '/index.php/file/downloadfile';
+        }
+
+        $fileId = isset($file->id) ? (int)$file->id : 0;
+        $fileSecurityHash = isset($file->security_hash) ? (string)$file->security_hash : '';
+
+        return $host . $baseUri . "/{$fileId}/{$fileSecurityHash}{$URLHash}";
+    }
+
+    public static function formatTelegramFileSize($bytes)
+    {
+        $bytes = (float)$bytes;
+        if ($bytes >= 1073741824) {
+            return number_format($bytes / 1073741824, 1, '.', '') . ' ГБ';
+        }
+        if ($bytes >= 1048576) {
+            return number_format($bytes / 1048576, 1, '.', '') . ' МБ';
+        }
+        if ($bytes >= 1024) {
+            return number_format($bytes / 1024, 1, '.', '') . ' КБ';
+        }
+        return $bytes . ' Б';
+    }
+
+    public static function getTelegramFileIcon($file)
+    {
+        $ext = strtolower((string)($file->extension ?? ''));
+        $type = strtolower((string)($file->type ?? ''));
+
+        if ($ext === 'mp4' || $ext === 'mov' || strpos($type, 'video/') === 0) {
+            return '🎥';
+        }
+        if (in_array($ext, array('jpg', 'jpeg', 'png', 'webp', 'gif', 'heic')) || strpos($type, 'image/') === 0) {
+            return '🖼';
+        }
+        if (in_array($ext, array('mp3', 'm4a', 'ogg', 'wav', 'oga')) || strpos($type, 'audio/') === 0) {
+            return '🎵';
+        }
+        if (in_array($ext, array('zip', 'rar', '7z', 'tar', 'gz', 'bz2'))) {
+            return '📦';
+        }
+        return '📎';
+    }
+
+    public static function sendTelegramChatFileAsLinkMessage($tchat, $file, $caption = '', $disableNotification = false, $params = array(), $msg = null, $topicContext = array(), $reason = 'oversized')
+    {
+        $fileUrl = self::getTelegramChatFileUrl($file);
+        $filename = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
+        $safeFilename = htmlspecialchars($filename, ENT_QUOTES, 'UTF-8');
+        $fileSizeFormatted = self::formatTelegramFileSize($file->size ?? (is_file($file->file_path_server ?? '') ? filesize($file->file_path_server) : 0));
+        $fileIcon = self::getTelegramFileIcon($file);
+
+        $replyTopicMsgId = is_array($params) ? ($params['reply_to_message_id'] ?? null) : $params;
+
+        $lines = array();
+        if (!empty($caption)) {
+            $lines[] = $caption;
+        }
+
+        $lines[] = "{$fileIcon} <a href=\"{$fileUrl}\"><b>{$safeFilename}</b></a> ({$fileSizeFormatted})";
+
+        if ($reason === 'oversized') {
+            $lines[] = '⚠️ <i>Файл превышает лимит Telegram для ботов (50 МБ). Доступен для скачивания по ссылке выше.</i>';
+        } else {
+            $lines[] = '⚠️ <i>Не удалось доставить как вложение в Telegram. Файл доступен для скачивания по ссылке выше.</i>';
+        }
+
+        $text = implode("\n", $lines);
+
+        $data = array(
+            'chat_id' => $tchat->bot->group_chat_id,
+            'message_thread_id' => $tchat->tchat_id,
+            'parse_mode' => 'HTML',
+            'text' => $text
+        );
+
+        if ($disableNotification) {
+            $data['disable_notification'] = true;
+        }
+
+        if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
+            $data['reply_to_message_id'] = (int)$replyTopicMsgId;
+        }
+
+        $sendData = self::sendTelegramRequest('sendMessage', $data);
+        self::$lastTelegramSendData = $sendData;
+
+        if ($sendData->isOk()) {
+            $msgIds = self::getTelegramSendMessageIds($sendData);
+            return !empty($msgIds) ? (int)$msgIds[0] : true;
+        }
+
+        return false;
+    }
+
+    public static function formatFailedTelegramFiles(array $failedEmbedCodes, array $telegramFiles = array())
+    {
+        $fileMap = array();
+        foreach ($telegramFiles as $tf) {
+            if (is_array($tf)) {
+                if (isset($tf['embed']) && isset($tf['file'])) {
+                    $fileMap[$tf['embed']] = $tf['file'];
+                } elseif (isset($tf['id']) && isset($tf['security_hash'])) {
+                    $fileMap['[file=' . $tf['id'] . '_' . $tf['security_hash'] . ']'] = $tf;
+                }
+            }
+        }
+
+        $formatted = array();
+        foreach ($failedEmbedCodes as $embed) {
+            if (isset($fileMap[$embed])) {
+                $file = $fileMap[$embed];
+                $url = self::getTelegramChatFileUrl($file);
+                $name = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
+                $safeName = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
+                $size = self::formatTelegramFileSize($file->size ?? (is_file($file->file_path_server ?? '') ? filesize($file->file_path_server) : 0));
+                $icon = self::getTelegramFileIcon($file);
+                $formatted[] = "{$icon} <a href=\"{$url}\"><b>{$safeName}</b></a> ({$size})";
+            } else {
+                $formatted[] = $embed;
+            }
+        }
+
+        return implode("\n", $formatted);
     }
 
     public static function sendTelegramChatFile($tchat, $fileData, $caption, $disableNotification = false, $params = array(), $msg = null, $topicContext = array())
@@ -226,6 +368,14 @@ class TelegramLiveHelperChatOperator {
         $tempUploadFile = null;
         $fileSize = is_file($file->file_path_server) ? filesize($file->file_path_server) : 0;
 
+        // Telegram Bot API maximum file size for uploads is 50 MB (52,428,800 bytes).
+        // Files larger than 50 MB cannot be uploaded via standard Bot API.
+        // Attempting to send them by URL fails with [400] Bad Request: failed to get HTTP URL content (Telegram limit for URLs is 20 MB).
+        // If file is oversized (> 50 MB), deliver direct clickable download link immediately without doomed Telegram media call.
+        if ($fileSize > 52428800) {
+            return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'oversized');
+        }
+
         try {
             $data = array(
                 'chat_id' => $tchat->bot->group_chat_id,
@@ -233,37 +383,31 @@ class TelegramLiveHelperChatOperator {
                 'parse_mode' => 'HTML'
             );
 
-            // Telegram Bot API supports multipart file uploads up to 50 MB (52428800 bytes).
-            // URL-based download limit on Telegram servers is restricted to 20 MB.
-            if ($fileSize > 0 && $fileSize <= 52428800) {
-                $originalFilename = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
-                if (!empty($file->extension) && !preg_match('/\\.' . preg_quote($file->extension, '/') . '$/i', $originalFilename)) {
-                    $originalFilename .= '.' . $file->extension;
-                }
-                $cleanFilename = preg_replace('/[^\\w\\.\\-\\s\\(\\)\\[\\]]/u', '_', $originalFilename);
-                if (empty($cleanFilename) || $cleanFilename === '.' . $file->extension) {
-                    $cleanFilename = $file->name . (!empty($file->extension) ? '.' . $file->extension : '');
-                }
-                $tempUploadDir = sys_get_temp_dir() . '/lhc_tg_upload_' . uniqid('', true);
-                if (@mkdir($tempUploadDir, 0755, true)) {
-                    $tempUploadFile = $tempUploadDir . '/' . $cleanFilename;
-                    if (@copy($file->file_path_server, $tempUploadFile)) {
-                        $multipartFilePath = $tempUploadFile;
-                        $multipartFileField = $field;
-                    }
-                }
-                if (empty($multipartFilePath)) {
-                    $multipartFilePath = $file->file_path_server;
+            $originalFilename = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
+            if (!empty($file->extension) && !preg_match('/\\.' . preg_quote($file->extension, '/') . '$/i', $originalFilename)) {
+                $originalFilename .= '.' . $file->extension;
+            }
+            $cleanFilename = preg_replace('/[^\\w\\.\\-\\s\\(\\)\\[\\]]/u', '_', $originalFilename);
+            if (empty($cleanFilename) || $cleanFilename === '.' . $file->extension) {
+                $cleanFilename = $file->name . (!empty($file->extension) ? '.' . $file->extension : '');
+            }
+            $tempUploadDir = sys_get_temp_dir() . '/lhc_tg_upload_' . uniqid('', true);
+            if (@mkdir($tempUploadDir, 0755, true)) {
+                $tempUploadFile = $tempUploadDir . '/' . $cleanFilename;
+                if (@copy($file->file_path_server, $tempUploadFile)) {
+                    $multipartFilePath = $tempUploadFile;
                     $multipartFileField = $field;
                 }
-                $fileHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
-                if (is_resource($fileHandle)) {
-                    $data[$field] = $fileHandle;
-                } else {
-                    $data[$field] = self::getTelegramChatFileUrl($file);
-                }
+            }
+            if (empty($multipartFilePath)) {
+                $multipartFilePath = $file->file_path_server;
+                $multipartFileField = $field;
+            }
+            $fileHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
+            if (is_resource($fileHandle)) {
+                $data[$field] = $fileHandle;
             } else {
-                $data[$field] = self::getTelegramChatFileUrl($file);
+                return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'unreadable');
             }
 
             if (!empty($caption)) {
@@ -297,6 +441,10 @@ class TelegramLiveHelperChatOperator {
                     'object_id' => $tchat->id
                 )
             );
+
+            // If Telegram rejected media sending (e.g. format/transcoding issue or transient error),
+            // deliver as a link message so the operator still receives the file and can download it.
+            return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'api_failed');
         } catch (\Exception $e) {
             \erLhcoreClassLog::write('SendFile exception '.$e->getMessage(),
                 \ezcLog::SUCCESS_AUDIT,
@@ -308,6 +456,8 @@ class TelegramLiveHelperChatOperator {
                     'object_id' => $tchat->id
                 )
             );
+
+            return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'exception');
         } finally {
             if ($tempUploadFile && file_exists($tempUploadFile)) {
                 @unlink($tempUploadFile);
@@ -1026,11 +1176,12 @@ class TelegramLiveHelperChatOperator {
                     }
 
                     if (!empty($failedEmbedCodes)) {
+                        $failedText = self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles);
                         self::sendTelegramRequest('sendMessage', array(
                             'chat_id' => $tchat->bot->group_chat_id,
                             'message_thread_id' => $tchat->tchat_id,
                             'parse_mode' => 'HTML',
-                            'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']: <i>' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']: ') . implode(' ', $failedEmbedCodes) . ($params['msg']->name_support != '' ? '</i>' : ''))
+                            'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']:' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']:') . "\n" . $failedText)
                         ));
                     }
                 }
@@ -1114,11 +1265,12 @@ class TelegramLiveHelperChatOperator {
                     }
 
                     if (!empty($failedEmbedCodes)) {
+                        $failedText = self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles);
                         self::sendTelegramRequest('sendMessage', array(
                             'chat_id' => $tchat->bot->group_chat_id,
                             'message_thread_id' => $tchat->tchat_id,
                             'parse_mode' => 'HTML',
-                            'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤: ') . implode(' ', $failedEmbedCodes) . ($botMessage->name_support != '' ? '</i>' : ''))
+                            'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']:' : '👤:') . "\n" . $failedText)
                         ));
                     }
                 }
@@ -1352,11 +1504,18 @@ class TelegramLiveHelperChatOperator {
                         }
 
                         if (!empty($failedEmbedCodes)) {
+                            $initialFilesList = array();
+                            foreach ($initialTelegramFiles as $itf) {
+                                if (isset($itf['file'])) {
+                                    $initialFilesList[] = $itf['file'];
+                                }
+                            }
+                            $failedText = self::formatFailedTelegramFiles($failedEmbedCodes, $initialFilesList);
                             self::sendTelegramRequest('sendMessage', array(
                                 'chat_id' => $tChat->bot->group_chat_id,
                                 'message_thread_id' => $tChat->tchat_id,
                                 'parse_mode' => 'HTML',
-                                'text' => trim('👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ' . implode(' ', $failedEmbedCodes))
+                                'text' => trim('👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']:' . "\n" . $failedText)
                             ));
                         }
                     }

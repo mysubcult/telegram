@@ -1224,6 +1224,102 @@ class TelegramLiveHelperChatOperator {
                         ));
                     }
                 }
+
+                // Forward any subsequent bot messages in this chat
+                $subsequentBotMessages = \erLhcoreClassModelmsg::getList(array(
+                    'filterin' => ['user_id' => [0, -2]],
+                    'filter' => array('chat_id' => $chat->id),
+                    'filtergt' => array('id' => $tchat->last_msg_id),
+                    'sort' => '`id` ASC'
+                ));
+
+                foreach ($subsequentBotMessages as $botMessage) {
+                    if ($botMessage->id <= $tchat->last_msg_id) {
+                        continue;
+                    }
+
+                    $db->beginTransaction();
+                    $tchat->syncAndLock('`id`');
+                    $tchat->last_msg_id = $botMessage->id;
+                    $tchat->updateThis(['update' => ['last_msg_id']]);
+                    $db->commit();
+
+                    if (isset($botMessage->meta_msg_array['content']['auto_responder'])) {
+                        continue;
+                    }
+
+                    $botTelegramFiles = self::getTelegramMessageFiles($botMessage);
+                    $botMessageText = self::stripTelegramFileEmbeds($botMessage->msg);
+                    $botReplyTopicMsgId = self::getTopicMessageId($params['msg'], $chat->id, $topicContext);
+
+                    if ($botMessageText !== '' && empty($botTelegramFiles)) {
+                        $botData = [
+                            'chat_id' => $tchat->bot->group_chat_id,
+                            'message_thread_id' => $tchat->tchat_id,
+                            'parse_mode' => 'HTML',
+                            'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤: ') . \erLhcoreClassBBCodePlain::make_clickable($botMessageText, array('sender' => 0)) . ($botMessage->name_support != '' ? '</i>' : ''))
+                        ];
+
+                        if ($chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT) {
+                            $botData['disable_notification'] = true;
+                        }
+
+                        if ($botReplyTopicMsgId !== null && (int)$botReplyTopicMsgId > 0) {
+                            $botData['reply_to_message_id'] = (int)$botReplyTopicMsgId;
+                        }
+
+                        $botSendData = self::sendTelegramMessageWithSplit($botData, $botMessage, $tchat, $topicContext);
+
+                        if (!$botSendData->isOk()) {
+                            \erLhcoreClassLog::write('sendBotMessage [' . $botSendData->getErrorCode() . '] ' . $botSendData->getDescription(),
+                                \ezcLog::SUCCESS_AUDIT,
+                                array(
+                                    'source' => 'lhc',
+                                    'category' => 'telegram_exception',
+                                    'line' => __LINE__,
+                                    'file' => __FILE__,
+                                    'object_id' => $chat->id
+                                )
+                            );
+                        }
+                    }
+
+                    if (!empty($botTelegramFiles)) {
+                        $failedBotEmbedCodes = array();
+                        $botFileIndex = 0;
+
+                        foreach ($botTelegramFiles as $botTelegramFile) {
+                            $botFileReplyTopicMsgId = self::getTopicReplyId($botMessage, $chat->id, $topicContext);
+                            $botFileCaption = self::getTelegramFileCaption($botMessage, $chat, $botTelegramFile['file'], $botFileIndex === 0 ? $botMessageText : '');
+                            $botFileDisableNotification = $chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT;
+                            $sentBotFileResult = self::sendTelegramChatFile(
+                                $tchat,
+                                $botTelegramFile,
+                                $botFileCaption,
+                                $botFileDisableNotification,
+                                $botFileReplyTopicMsgId,
+                                $botMessage,
+                                $topicContext
+                            );
+                            if ($sentBotFileResult === false) {
+                                $failedBotEmbedCodes[] = $botTelegramFile['embed'];
+                            } else {
+                                self::saveTelegramFileTopicMsgId($botMessage, $sentBotFileResult, $botTelegramFile, $botFileCaption, $topicContext);
+                            }
+                            $botFileIndex++;
+                        }
+
+                        if (!empty($failedBotEmbedCodes)) {
+                            $failedBotText = self::formatFailedTelegramFiles($failedBotEmbedCodes, $botTelegramFiles);
+                            self::sendTelegramRequest('sendMessage', array(
+                                'chat_id' => $tchat->bot->group_chat_id,
+                                'message_thread_id' => $tchat->tchat_id,
+                                'parse_mode' => 'HTML',
+                                'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']:' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']:') . "\n" . $failedBotText)
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1243,6 +1339,10 @@ class TelegramLiveHelperChatOperator {
 
             $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $chat->id), 'filtergt' => array('id' => $params['last_msg_id'])));
             foreach ($botMessages as $botMessage) {
+
+                if ($botMessage->id <= $tchat->last_msg_id) {
+                    continue;
+                }
 
                 $tchat->last_msg_id = $botMessage->id;
                 $tchat->updateThis(['update' => ['last_msg_id']]);

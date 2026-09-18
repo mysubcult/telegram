@@ -178,9 +178,45 @@ class TelegramLiveHelperChatOperator {
 
     public static function getTelegramChatFileUrl($file)
     {
-        $URLHash = '';
+        $fileId = 0;
+        $fileChatId = 0;
+        $fileHash = '';
+        $fileSecurityHash = '';
 
-        if (isset($file->chat_id) && $file->chat_id > 0) {
+        if (is_object($file)) {
+            $fileId = (int)($file->id ?? 0);
+            $fileChatId = (int)($file->chat_id ?? 0);
+            $fileHash = (string)($file->hash ?? '');
+            try {
+                // erLhcoreClassModelChatFile computes security_hash dynamically via __get('security_hash')
+                // without declaring __isset(), so isset($file->security_hash) evaluates to false.
+                // We must read $file->security_hash directly to invoke the getter.
+                $fileSecurityHash = (string)$file->security_hash;
+            } catch (\Throwable $e) {
+                $fileSecurityHash = '';
+            }
+        } elseif (is_array($file)) {
+            $fileId = (int)($file['id'] ?? 0);
+            $fileChatId = (int)($file['chat_id'] ?? 0);
+            $fileHash = (string)($file['hash'] ?? '');
+            $fileSecurityHash = (string)($file['security_hash'] ?? '');
+        }
+
+        if ($fileSecurityHash === '' && $fileId > 0 && class_exists('\\erLhcoreClassModelChatFile')) {
+            try {
+                $chatFileObj = \erLhcoreClassModelChatFile::fetch($fileId);
+                if ($chatFileObj instanceof \erLhcoreClassModelChatFile) {
+                    $fileSecurityHash = (string)$chatFileObj->security_hash;
+                    if ($fileChatId <= 0) {
+                        $fileChatId = (int)$chatFileObj->chat_id;
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        $URLHash = '';
+        if ($fileChatId > 0) {
             $tsHash = time();
             $secretHash = '';
             try {
@@ -188,8 +224,6 @@ class TelegramLiveHelperChatOperator {
             } catch (\Throwable $e) {
                 $secretHash = '';
             }
-            $fileHash = isset($file->hash) ? (string)$file->hash : '';
-            $fileId = isset($file->id) ? (int)$file->id : 0;
             $temporaryHash = sha1($fileId . '_' . $fileHash . '_' . $tsHash . '_' . $secretHash);
             $URLHash = "/(vhash)/{$temporaryHash}/(vts)/{$tsHash}";
         }
@@ -208,10 +242,9 @@ class TelegramLiveHelperChatOperator {
             $baseUri = '/index.php/file/downloadfile';
         }
 
-        $fileId = isset($file->id) ? (int)$file->id : 0;
-        $fileSecurityHash = isset($file->security_hash) ? (string)$file->security_hash : '';
+        $securityHashPart = ($fileSecurityHash !== '') ? "/{$fileSecurityHash}" : '';
 
-        return $host . $baseUri . "/{$fileId}/{$fileSecurityHash}{$URLHash}";
+        return $host . $baseUri . "/{$fileId}" . $securityHashPart . "{$URLHash}";
     }
 
     public static function formatTelegramFileSize($bytes)
@@ -231,8 +264,8 @@ class TelegramLiveHelperChatOperator {
 
     public static function getTelegramFileIcon($file)
     {
-        $ext = strtolower((string)($file->extension ?? ''));
-        $type = strtolower((string)($file->type ?? ''));
+        $ext = strtolower((string)(is_object($file) ? ($file->extension ?? '') : ($file['extension'] ?? '')));
+        $type = strtolower((string)(is_object($file) ? ($file->type ?? '') : ($file['type'] ?? '')));
 
         if ($ext === 'mp4' || $ext === 'mov' || strpos($type, 'video/') === 0) {
             return '🎥';
@@ -318,9 +351,15 @@ class TelegramLiveHelperChatOperator {
             if (isset($fileMap[$embed])) {
                 $file = $fileMap[$embed];
                 $url = self::getTelegramChatFileUrl($file);
-                $name = !empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : ''));
+                $name = is_object($file)
+                    ? (!empty($file->upload_name) ? $file->upload_name : ($file->name . (!empty($file->extension) ? '.' . $file->extension : '')))
+                    : (!empty($file['upload_name']) ? $file['upload_name'] : ($file['name'] ?? 'File'));
                 $safeName = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
-                $size = self::formatTelegramFileSize($file->size ?? (is_file($file->file_path_server ?? '') ? filesize($file->file_path_server) : 0));
+                $size = self::formatTelegramFileSize(
+                    is_object($file)
+                        ? ($file->size ?? (is_file($file->file_path_server ?? '') ? filesize($file->file_path_server) : 0))
+                        : ($file['size'] ?? 0)
+                );
                 $icon = self::getTelegramFileIcon($file);
                 $formatted[] = "{$icon} <a href=\"{$url}\"><b>{$safeName}</b></a> ({$size})";
             } else {

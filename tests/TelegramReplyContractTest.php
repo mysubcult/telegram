@@ -441,8 +441,32 @@ expectTelegramContract($resOversized === 999, 'sendTelegramChatFile for oversize
 expectTelegramContract(count($sentRequests) === 1, 'oversized file must make exactly one sendMessage request');
 expectTelegramContract(strpos($sentRequests[0]['uri'], 'sendMessage') !== false, 'oversized file must use sendMessage action, not sendVideo/sendDocument');
 expectTelegramContract(strpos($sentRequests[0]['body'], '50') !== false, 'oversized file must mention 50 MB limit');
-expectTelegramContract(strpos($sentRequests[0]['body'], '98124cdf4fb0498b8b04f517c12ba2a5.mp4') !== false, 'oversized file must include safe filename');
+$decodedBody = urldecode($sentRequests[0]['body']);
+expectTelegramContract(strpos($decodedBody, '98124cdf4fb0498b8b04f517c12ba2a5.mp4') !== false, 'oversized file must include safe filename');
+expectTelegramContract(strpos($decodedBody, '9002//') === false, 'oversized file URL must not contain double slash /9002//');
+expectTelegramContract(strpos($decodedBody, '9002/c04ccba0dcf25a797b1382fb219f6b72') !== false, 'oversized file URL must contain security_hash');
 
 unlink($oversizedFixture);
+
+// Test magic property object mimicking erLhcoreClassModelChatFile (__get without __isset)
+class MockChatFileMagic {
+    public $id = 9002;
+    public $chat_id = 24869;
+    public $name = '98124cdf4fb0498b8b04f517c12ba2a5';
+    public $upload_name = '';
+    public $extension = 'mp4';
+    public $size = 112855947;
+    public $type = 'video/mp4';
+    public function __get($var) {
+        if ($var === 'security_hash') {
+            return 'c04ccba0dcf25a797b1382fb219f6b72';
+        }
+        return null;
+    }
+}
+$mockMagicFile = new MockChatFileMagic();
+$magicUrl = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::getTelegramChatFileUrl($mockMagicFile);
+expectTelegramContract(strpos($magicUrl, '9002//') === false, 'getTelegramChatFileUrl with magic getter must not have double slash');
+expectTelegramContract(strpos($magicUrl, '9002/c04ccba0dcf25a797b1382fb219f6b72') !== false, 'getTelegramChatFileUrl with magic getter must contain security_hash');
 
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

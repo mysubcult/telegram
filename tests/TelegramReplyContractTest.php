@@ -537,4 +537,8 @@ expectTelegramContract(strpos($sentRequests[0]['body'], 'name="caption"') === fa
 unlink($stickerWebmFixture);
 
 
+$gmCode = file_get_contents(__DIR__ . '/../classes/Commands/GenericmessageCommand.php');
+expectTelegramContract(strpos($gmCode, 'thumb_file_id') !== false, 'GenericmessageCommand must pass thumb_file_id');
+expectTelegramContract(strpos($gmCode, "'_thumb.'") !== false, 'GenericmessageCommand must store companion thumbnail');
+
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

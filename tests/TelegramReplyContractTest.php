@@ -469,4 +469,72 @@ $magicUrl = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperCha
 expectTelegramContract(strpos($magicUrl, '9002//') === false, 'getTelegramChatFileUrl with magic getter must not have double slash');
 expectTelegramContract(strpos($magicUrl, '9002/c04ccba0dcf25a797b1382fb219f6b72') !== false, 'getTelegramChatFileUrl with magic getter must contain security_hash');
 
+// Test sticker dispatch via sendTelegramChatFile (.tgs)
+$stickerTgsFixture = tempnam(sys_get_temp_dir(), 'tg_sticker_tgs_');
+file_put_contents($stickerTgsFixture, 'tgs_content');
+$mockTgsFile = (object)[
+    'id' => 9027,
+    'security_hash' => 'hash_tgs',
+    'hash' => 'dummy',
+    'chat_id' => 24922,
+    'name' => '1900d00ca3aff38ff7bdf113d936b268',
+    'upload_name' => 'file_2633.tgs',
+    'extension' => 'tgs',
+    'size' => 30205,
+    'type' => 'application/gzip',
+    'file_path_server' => $stickerTgsFixture
+];
+
+$sentRequests = [];
+$mockHandler = function ($request, $options) use (&$sentRequests) {
+    $sentRequests[] = [
+        'uri' => (string)$request->getUri(),
+        'body' => $request->getBody()->getContents()
+    ];
+    return \GuzzleHttp\Promise\Create::promiseFor(new \GuzzleHttp\Psr7\Response(200, [], '{"ok":true,"result":{"message_id":1001,"date":1,"chat":{"id":-100},"sticker":{"is_animated":true}}}'));
+};
+\Longman\TelegramBot\Request::setClient(new \GuzzleHttp\Client(['handler' => $mockHandler]));
+
+$resTgs = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::sendTelegramChatFile(
+    $mockTchatBot,
+    ['file' => $mockTgsFile],
+    'Sticker Flame'
+);
+expectTelegramContract($resTgs === 1001, 'sendTelegramChatFile for .tgs sticker must succeed with message ID');
+expectTelegramContract(count($sentRequests) === 1, '.tgs sticker must make exactly one request');
+expectTelegramContract(strpos($sentRequests[0]['uri'], 'sendSticker') !== false, '.tgs sticker must call sendSticker');
+expectTelegramContract(strpos($sentRequests[0]['body'], 'name="sticker"') !== false, '.tgs sticker must upload field sticker');
+expectTelegramContract(strpos($sentRequests[0]['body'], 'name="caption"') === false, '.tgs sticker must not include caption in sendSticker payload');
+unlink($stickerTgsFixture);
+
+// Test video sticker (.webm)
+$stickerWebmFixture = tempnam(sys_get_temp_dir(), 'tg_sticker_webm_');
+file_put_contents($stickerWebmFixture, 'webm_content');
+$mockWebmFile = (object)[
+    'id' => 9028,
+    'security_hash' => 'hash_webm',
+    'hash' => 'dummy',
+    'chat_id' => 24922,
+    'name' => '26d5bb25dc0f66dc5ab62119d17cbdd8',
+    'upload_name' => 'file_2634.webm',
+    'extension' => 'webm',
+    'size' => 90668,
+    'type' => 'video/webm',
+    'file_path_server' => $stickerWebmFixture
+];
+
+$sentRequests = [];
+$resWebm = \LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::sendTelegramChatFile(
+    $mockTchatBot,
+    ['file' => $mockWebmFile],
+    'Sticker Gachi'
+);
+expectTelegramContract($resWebm === 1001, 'sendTelegramChatFile for .webm sticker must succeed with message ID');
+expectTelegramContract(count($sentRequests) === 1, '.webm sticker must make exactly one request');
+expectTelegramContract(strpos($sentRequests[0]['uri'], 'sendSticker') !== false, '.webm sticker must call sendSticker');
+expectTelegramContract(strpos($sentRequests[0]['body'], 'name="sticker"') !== false, '.webm sticker must upload field sticker');
+expectTelegramContract(strpos($sentRequests[0]['body'], 'name="caption"') === false, '.webm sticker must not include caption in sendSticker payload');
+unlink($stickerWebmFixture);
+
+
 fwrite(STDOUT, "Telegram reply contract tests: OK\n");

@@ -394,10 +394,34 @@ class TelegramLiveHelperChatOperator {
 
         $extension = strtolower((string)$file->extension);
         $type = strtolower((string)$file->type);
+        $fileSize = (int)($file->size ?? (is_file($file->file_path_server ?? '') ? filesize($file->file_path_server) : 0));
         $method = 'sendDocument';
         $field = 'document';
+        $isStickerCandidate = false;
 
-        if (in_array($extension, array('jpg', 'jpeg', 'png', 'webp')) || in_array($type, array('image/jpeg', 'image/png', 'image/webp'))) {
+        if ($extension === 'tgs') {
+            $method = 'sendSticker';
+            $field = 'sticker';
+            $isStickerCandidate = true;
+        } elseif ($extension === 'webm' || $type === 'video/webm') {
+            if ($fileSize <= 262144 && (preg_match('/^file_\d+\.webm$/i', (string)$file->upload_name) || !empty($caption))) {
+                $method = 'sendSticker';
+                $field = 'sticker';
+                $isStickerCandidate = true;
+            } else {
+                $method = 'sendVideo';
+                $field = 'video';
+            }
+        } elseif ($extension === 'webp' || $type === 'image/webp') {
+            if ($fileSize <= 524288 && preg_match('/^file_\d+\.webp$/i', (string)$file->upload_name)) {
+                $method = 'sendSticker';
+                $field = 'sticker';
+                $isStickerCandidate = true;
+            } else {
+                $method = 'sendPhoto';
+                $field = 'photo';
+            }
+        } elseif (in_array($extension, array('jpg', 'jpeg', 'png')) || in_array($type, array('image/jpeg', 'image/png'))) {
             $method = 'sendPhoto';
             $field = 'photo';
         } elseif ($extension === 'ogg' || $type === 'audio/ogg') {
@@ -459,7 +483,7 @@ class TelegramLiveHelperChatOperator {
                 return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'unreadable');
             }
 
-            if (!empty($caption)) {
+            if (!empty($caption) && $method !== 'sendSticker') {
                 $data['caption'] = $caption;
             }
 
@@ -478,6 +502,34 @@ class TelegramLiveHelperChatOperator {
             if ($sendData->isOk()) {
                 $msgIds = self::getTelegramSendMessageIds($sendData);
                 return !empty($msgIds) ? (int)$msgIds[0] : true;
+            }
+
+            if ($isStickerCandidate) {
+                \erLhcoreClassLog::write('SendSticker rejected ['.$sendData->getErrorCode().'] '. $sendData->getDescription() . ', retrying fallback',
+                    \ezcLog::SUCCESS_AUDIT,
+                    array(
+                        'source' => 'lhc',
+                        'category' => 'telegram_exception',
+                        'line' => __LINE__,
+                        'file' => __FILE__,
+                        'object_id' => $tchat->id
+                    )
+                );
+                $fallbackMethod = ($extension === 'webm' ? 'sendVideo' : ($extension === 'webp' ? 'sendPhoto' : 'sendDocument'));
+                $fallbackField = ($fallbackMethod === 'sendVideo' ? 'video' : ($fallbackMethod === 'sendPhoto' ? 'photo' : 'document'));
+                if (isset($data['sticker']) && is_resource($data['sticker'])) {
+                    @fclose($data['sticker']);
+                }
+                unset($data['sticker']);
+                if (!empty($caption)) {
+                    $data['caption'] = $caption;
+                }
+                $fallbackSendData = self::sendTelegramRequest($fallbackMethod, $data, $multipartFilePath, $fallbackField);
+                if ($fallbackSendData->isOk()) {
+                    self::$lastTelegramSendData = $fallbackSendData;
+                    $msgIds = self::getTelegramSendMessageIds($fallbackSendData);
+                    return !empty($msgIds) ? (int)$msgIds[0] : true;
+                }
             }
 
             \erLhcoreClassLog::write('SendFile ['.$sendData->getErrorCode().']'. $sendData->getDescription(),

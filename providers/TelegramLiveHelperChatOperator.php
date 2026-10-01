@@ -1274,6 +1274,32 @@ class TelegramLiveHelperChatOperator {
                             $telegramFiles = self::getTelegramMessageFiles($params['msg']);
                             $messageText = self::stripTelegramFileEmbeds($params['msg']->msg);
 
+                            if ($tchat->tchat_id == null || $tchat->tchat_id == 0) {
+                                $topicTitle = mb_substr('[' . $chat->department . '] ' . $chat->nick . ' #' . $chat->id . ($chat->ip != '' ? ' | ' . $chat->ip : '') . ($chat->country_code != '' ? ' | ' . strtoupper($chat->country_code) : '') . ($chat->referrer != '' ? ' | ' . ltrim($chat->referrer, '/') : '') . (is_object($chat->online_user) && $chat->online_user->page_title != '' ? ' | ' . $chat->online_user->page_title : ''), 0, 128);
+                                $sendTopicData = \Longman\TelegramBot\Request::send('createForumTopic', [
+                                    'chat_id' => $tchat->bot->group_chat_id,
+                                    'name' => $topicTitle
+                                ]);
+
+                                if ($sendTopicData->isOk()) {
+                                    $tchat->tchat_id = $sendTopicData->getResult()->getMessageThreadId();
+                                    $tchat->updateThis(['update' => ['tchat_id']]);
+                                } else {
+                                    \erLhcoreClassLog::write('messageAdded createForumTopic failed: ' . $sendTopicData->getDescription(),
+                                        \ezcLog::SUCCESS_AUDIT,
+                                        array(
+                                            'source' => 'lhc',
+                                            'category' => 'telegram_exception',
+                                            'line' => __LINE__,
+                                            'file' => __FILE__,
+                                            'object_id' => $chat->id
+                                        )
+                                    );
+                                    self::releaseTelegramMessageLock($params['msg']->id, $namespace);
+                                    return;
+                                }
+                            }
+
                             $sendData = null;
 
                             if ($messageText !== '' && empty($telegramFiles)) {

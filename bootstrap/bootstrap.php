@@ -109,8 +109,8 @@ class erLhcoreClassExtensionLhctelegram
 
     
     /*
-     * Telegram крутит индикатор на inline-кнопке, пока бот не ответит answerCallbackQuery.
-     * Отвечаем сразу при получении нажатия, до обработки триггеров.
+     * Telegram keeps showing a loading indicator on an inline button until the bot calls answerCallbackQuery.
+     * Answer as soon as the button click arrives, before bot triggers are processed.
      */
     public static function answerCallbackQuery($params)
     {

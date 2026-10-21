@@ -5,12 +5,14 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
 /**
  * Reply suggestions for operators working from Telegram topics.
  *
- * Visitor writes into a chat that an operator already handles -> after a short delay a resque job asks
- * the configured REST API (bot prompt lives in LHC) for a draft reply. Unless the model answers SKIP,
- * the draft is posted into the chat topic with "Send" / "Dismiss" inline buttons, handled in CallbackqueryCommand.
+ * mode 'button': every visitor message in the topic gets a "💡 Ответ" button; pressing it queues a resque job
+ * that asks the configured REST API (bot prompt lives in LHC) for a draft reply to that message.
+ * mode 'auto': the job is queued by itself after each visitor message in a chat an operator already handles,
+ * waits 'delay' seconds and gives up if anyone wrote meanwhile or the model answers SKIP.
+ * The draft is posted into the chat topic with "Send" / "Dismiss" buttons. All buttons are handled in CallbackqueryCommand.
  *
  * settings/settings.ini.php:
- *  'suggest' => array('enabled' => true, 'rest_api_id' => 105, 'dep_ids' => array(4), 'delay' => 4)
+ *  'suggest' => array('enabled' => true, 'mode' => 'button', 'rest_api_id' => 105, 'dep_ids' => array(4), 'delay' => 4)
  */
 #[\AllowDynamicProperties]
 class TelegramSuggest
@@ -19,6 +21,8 @@ class TelegramSuggest
     const HEADER = '💡 Подсказка:';
     const CALLBACK_SEND = 'sgs';
     const CALLBACK_DISMISS = 'sgx';
+    const CALLBACK_GENERATE = 'sgg';
+    const NO_SUGGESTION = '💡 Подсказки нет: в базе знаний не нашлось уверенного ответа, ответьте сами.';
 
     public static function getSettings()
     {
@@ -27,6 +31,7 @@ class TelegramSuggest
 
         return array(
             'enabled' => !empty($suggest['enabled']),
+            'mode' => (($suggest['mode'] ?? 'button') === 'auto') ? 'auto' : 'button',
             'rest_api_id' => (int)($suggest['rest_api_id'] ?? 0),
             'dep_ids' => array_map('intval', (array)($suggest['dep_ids'] ?? array())),
             'delay' => max(0, (int)($suggest['delay'] ?? 4)),
@@ -56,12 +61,52 @@ class TelegramSuggest
         return trim($messageText);
     }
 
-    public static function buildKeyboard($chatId)
+    public static function buildKeyboard($chatId, $withSend = true)
+    {
+        $buttons = array();
+        if ($withSend === true) {
+            $buttons[] = ['text' => '✅ Отправить', 'callback_data' => self::CALLBACK_SEND . '||' . (int)$chatId];
+        }
+        $buttons[] = ['text' => '✖️', 'callback_data' => self::CALLBACK_DISMISS . '||' . (int)$chatId];
+        return new \Longman\TelegramBot\Entities\InlineKeyboard($buttons);
+    }
+
+    public static function buildGenerateKeyboard($chatId, $msgId)
     {
         return new \Longman\TelegramBot\Entities\InlineKeyboard([
-            ['text' => '✅ Отправить', 'callback_data' => self::CALLBACK_SEND . '||' . (int)$chatId],
-            ['text' => '✖️', 'callback_data' => self::CALLBACK_DISMISS . '||' . (int)$chatId],
+            ['text' => '💡 Ответ', 'callback_data' => self::CALLBACK_GENERATE . '||' . (int)$chatId . '||' . (int)$msgId],
         ]);
+    }
+
+    public static function getOperatorTopics($chat)
+    {
+        $topics = array();
+        foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($chat->online_user_id > 0 ? ($chat->online_user_id * -1) : $chat->id), 'type' => 1]]) as $tchat) {
+            if ($tchat->bot->bot_client != 0 && (int)$tchat->tchat_id > 0) {
+                $topics[] = $tchat;
+            }
+        }
+        return $topics;
+    }
+
+    // Puts "💡 Ответ" under the visitor message the operator topic already shows
+    public static function attachGenerateButton($chat, $msg)
+    {
+        foreach (self::getOperatorTopics($chat) as $tchat) {
+            new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
+            $topicContext = TelegramLiveHelperChatOperator::getTelegramTopicContextForChat($tchat);
+
+            // Re-reads meta_msg, messageAdded has just stored the topic message id there
+            if (!TelegramLiveHelperChatOperator::isTopicMessageAlreadySent($msg, $topicContext)) {
+                continue;
+            }
+
+            \Longman\TelegramBot\Request::editMessageReplyMarkup([
+                'chat_id' => $tchat->bot->group_chat_id,
+                'message_id' => TelegramLiveHelperChatOperator::getStoredTopicMessageId($msg, null, $topicContext),
+                'reply_markup' => self::buildGenerateKeyboard($chat->id, $msg->id),
+            ]);
+        }
     }
 
     /**
@@ -81,10 +126,6 @@ class TelegramSuggest
             return;
         }
 
-        if ((int)$chat->status !== \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT || (int)$chat->user_id <= 0) {
-            return;
-        }
-
         if (!empty($settings['dep_ids']) && !in_array((int)$chat->dep_id, $settings['dep_ids'], true)) {
             return;
         }
@@ -93,12 +134,28 @@ class TelegramSuggest
             return;
         }
 
-        $resque = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhcphpresque');
-        if (!is_object($resque)) {
+        // Only chats an operator already accepted: "Send" posts a plain operator message and does not accept pending chats
+        if ((int)$chat->status !== \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT || (int)$chat->user_id <= 0) {
             return;
         }
 
-        $resque->enqueue(self::QUEUE, '\\' . self::class, array('chat_id' => (int)$chat->id, 'msg_id' => (int)$msg->id));
+        if ($settings['mode'] === 'button') {
+            self::attachGenerateButton($chat, $msg);
+            return;
+        }
+
+        self::enqueue($chat->id, $msg->id, false);
+    }
+
+    public static function enqueue($chatId, $msgId, $manual)
+    {
+        $resque = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhcphpresque');
+        if (!is_object($resque)) {
+            return false;
+        }
+
+        $resque->enqueue(self::QUEUE, '\\' . self::class, array('chat_id' => (int)$chatId, 'msg_id' => (int)$msgId, 'manual' => $manual ? 1 : 0));
+        return true;
     }
 
     // True when anyone (visitor or operator) wrote after the message we are suggesting for
@@ -112,6 +169,13 @@ class TelegramSuggest
         return $stmt->fetchColumn() !== false;
     }
 
+    public static function shiftHistory($bodyRaw, $offset)
+    {
+        return preg_replace_callback('/\{previous_visitor_messages_list_url__([0-9]+)(?:__([0-9]+))?\}/', function ($m) use ($offset) {
+            return '{previous_visitor_messages_list_url__' . $m[1] . '__' . ((int)($m[2] ?? 0) + (int)$offset) . '}';
+        }, (string)$bodyRaw);
+    }
+
     public static function requestSuggestion($chat, $msg, $restApiId)
     {
         $restAPI = \erLhcoreClassModelGenericBotRestAPI::fetch($restApiId);
@@ -119,9 +183,20 @@ class TelegramSuggest
             return '';
         }
 
+        $method = $restAPI->configuration_array['parameters'][0];
+
+        // History placeholder counts back from the newest chat message; shift it so the history ends at $msg
+        // (same filters as the placeholder in erLhcoreClassGenericBotActionRestapi::extractDynamicVariables)
+        $newer = \erLhcoreClassModelmsg::getCount(array(
+            'filter' => array('chat_id' => $chat->id),
+            'filtergt' => array('id' => $msg->id),
+            'filternotlikefields' => [['meta_msg' => '"debug":true'], ['meta_msg' => '{"content":{"typing"'], ['meta_msg' => '{"content":{"execute_js"']]
+        ));
+        $method['body_raw'] = self::shiftHistory($method['body_raw'], $newer);
+
         $response = \erLhcoreClassGenericBotActionRestapi::makeRequest(
             $restAPI->configuration_array['host'],
-            $restAPI->configuration_array['parameters'][0],
+            $method,
             array('rest_api' => $restAPI, 'action' => array(), 'rest_api_method_params' => array(), 'chat' => $chat, 'params' => array('msg' => $msg))
         );
 
@@ -144,11 +219,13 @@ class TelegramSuggest
     public function perform()
     {
         $settings = self::getSettings();
+        $manual = !empty($this->args['manual']);
+
         if ($settings['enabled'] === false) {
             return;
         }
 
-        if ($settings['delay'] > 0) {
+        if ($manual === false && $settings['delay'] > 0) {
             sleep($settings['delay']);
         }
 
@@ -161,26 +238,28 @@ class TelegramSuggest
         $chat = \erLhcoreClassModelChat::fetch($chatId);
         $msg = \erLhcoreClassModelmsg::fetch($msgId);
 
-        if (!($chat instanceof \erLhcoreClassModelChat) || !($msg instanceof \erLhcoreClassModelmsg) || (int)$chat->status !== \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT) {
+        if (!($chat instanceof \erLhcoreClassModelChat) || !($msg instanceof \erLhcoreClassModelmsg) || (int)$msg->chat_id !== $chatId || (int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
             return;
         }
 
-        // Operator already answered or visitor keeps typing (the newer message has its own job)
-        if (self::hasNewerMessages($chatId, $msgId)) {
+        // Auto mode: operator already answered or visitor keeps typing (the newer message has its own job)
+        if ($manual === false && ((int)$chat->status !== \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT || self::hasNewerMessages($chatId, $msgId))) {
             return;
         }
 
         $suggestion = self::requestSuggestion($chat, $msg, $settings['rest_api_id']);
 
-        if ($suggestion === '' || self::hasNewerMessages($chatId, $msgId)) {
+        if ($manual === false && ($suggestion === '' || self::hasNewerMessages($chatId, $msgId))) {
             return;
         }
 
-        foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($chat->online_user_id > 0 ? ($chat->online_user_id * -1) : $chat->id), 'type' => 1]]) as $tchat) {
+        // Operator asked explicitly, so an empty answer is reported too
+        self::postSuggestion($chat, $msg, $suggestion);
+    }
 
-            if ($tchat->bot->bot_client == 0 || (int)$tchat->tchat_id <= 0) {
-                continue;
-            }
+    public static function postSuggestion($chat, $msg, $suggestion)
+    {
+        foreach (self::getOperatorTopics($chat) as $tchat) {
 
             new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
             $topicContext = TelegramLiveHelperChatOperator::getTelegramTopicContextForChat($tchat);
@@ -188,9 +267,9 @@ class TelegramSuggest
             $data = array(
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
-                'text' => self::HEADER . "\n\n" . $suggestion,
+                'text' => $suggestion !== '' ? self::HEADER . "\n\n" . $suggestion : self::NO_SUGGESTION,
                 'disable_web_page_preview' => true,
-                'reply_markup' => self::buildKeyboard($chat->id),
+                'reply_markup' => self::buildKeyboard($chat->id, $suggestion !== ''),
             );
 
             $replyId = TelegramLiveHelperChatOperator::getStoredTopicMessageId($msg, null, $topicContext);
@@ -229,11 +308,22 @@ class TelegramSuggest
     /**
      * Inline button pressed under a suggestion. Returns the text for answerCallbackQuery.
      */
-    public static function handleCallback($callbackQuery, $tBot, $action, $chatId)
+    public static function handleCallback($callbackQuery, $tBot, $action, $chatId, $msgId = 0)
     {
         $message = $callbackQuery->getMessage();
         $groupChatId = $message->getChat()->getId();
         $topicMsgId = (int)$message->getMessageId();
+
+        if ($action === self::CALLBACK_GENERATE) {
+            $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
+            if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
+                return 'Оператор не найден';
+            }
+            if (self::getSettings()['enabled'] === false) {
+                return 'Подсказки выключены';
+            }
+            return self::enqueue((int)$chatId, (int)$msgId, true) ? 'Готовлю ответ…' : 'Фоновые задачи недоступны';
+        }
 
         if ($action === self::CALLBACK_DISMISS) {
             $deleted = \Longman\TelegramBot\Request::deleteMessage(['chat_id' => $groupChatId, 'message_id' => $topicMsgId]);

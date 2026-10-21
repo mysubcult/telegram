@@ -99,9 +99,9 @@ class CallbackqueryCommand extends SystemCommand
             }
 
 
-        } else if ($paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_SEND || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_DISMISS) {
+        } else if ($paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_SEND || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_DISMISS || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_GENERATE) {
 
-            $answer = \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleCallback($callback_query, $tBot, $paramsCallback[0], $paramsCallback[1] ?? 0);
+            $answer = \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleCallback($callback_query, $tBot, $paramsCallback[0], $paramsCallback[1] ?? 0, $paramsCallback[2] ?? 0);
 
             return Request::answerCallbackQuery([
                 'callback_query_id' => $callback_query_id,

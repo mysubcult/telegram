@@ -9,9 +9,10 @@ return array(
     // Reply suggestions in operator topics, see providers/TelegramSuggest.php
     'suggest' => array(
         'enabled' => false,
+        'mode' => 'button', // 'button' = generate on «💡 Ответ» press, 'auto' = after every visitor message
         'rest_api_id' => 0,
         'dep_ids' => array(), // empty = all departments
-        'delay' => 4 // seconds to wait for operator's own reply
+        'delay' => 4 // auto mode: seconds to wait for operator's own reply
     ),
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'

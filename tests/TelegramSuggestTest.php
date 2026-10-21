@@ -24,6 +24,7 @@ class TelegramSuggestTest
         self::testIsSuggestableText();
         self::testExtractSuggestion();
         self::testKeyboard();
+        self::testShiftHistory();
 
         echo "All TelegramSuggestTest passed successfully! [OK]\n";
     }
@@ -72,7 +73,24 @@ class TelegramSuggestTest
         foreach ($keyboard[0] as $button) {
             self::assert(strlen($button['callback_data']) <= 64, 'Telegram limits callback_data to 64 bytes');
         }
+        $noSend = json_decode(json_encode(TelegramSuggest::buildKeyboard(25535, false)), true)['inline_keyboard'];
+        self::assert(count($noSend[0]) === 1 && $noSend[0][0]['callback_data'] === 'sgx||25535', 'Without send only dismiss stays');
+
+        $generate = json_decode(json_encode(TelegramSuggest::buildGenerateKeyboard(25535, 298976)), true)['inline_keyboard'];
+        self::assert($generate[0][0]['callback_data'] === 'sgg||25535||298976', 'Generate callback data');
+        self::assert(strlen($generate[0][0]['callback_data']) <= 64, 'Generate callback data fits 64 bytes');
+        $parts = explode('||', $generate[0][0]['callback_data']);
+        self::assert($parts[0] === TelegramSuggest::CALLBACK_GENERATE && (int)$parts[1] === 25535 && (int)$parts[2] === 298976, 'CallbackqueryCommand splits it into action, chat, message');
         echo "  [PASS] buildKeyboard\n";
+    }
+
+    private static function testShiftHistory()
+    {
+        $body = '[{previous_visitor_messages_list_url__20__0}{{args.item.msg}}{/previous_visitor_messages_list_url}]';
+        self::assert(TelegramSuggest::shiftHistory($body, 3) === '[{previous_visitor_messages_list_url__20__3}{{args.item.msg}}{/previous_visitor_messages_list_url}]', 'Offset is added');
+        self::assert(TelegramSuggest::shiftHistory('{previous_visitor_messages_list_url__10}', 2) === '{previous_visitor_messages_list_url__10__2}', 'Missing offset becomes explicit');
+        self::assert(TelegramSuggest::shiftHistory($body, 0) === str_replace('__20__0', '__20__0', $body), 'Zero offset keeps body');
+        echo "  [PASS] shiftHistory\n";
     }
 }
 

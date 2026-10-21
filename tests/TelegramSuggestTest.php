@@ -45,6 +45,11 @@ class TelegramSuggestTest
         foreach (array('Ожидайте, пожалуйста.', 'SKIP the step and continue', 'Пропустите шаг SKIP') as $text) {
             self::assert(TelegramSuggest::isSkip($text) === false, 'Should not be skip: ' . json_encode($text));
         }
+        self::assert(TelegramSuggest::isSkip('SKIP: клиент ругается, вопроса нет') === true, 'Skip with reason');
+        self::assert(TelegramSuggest::skipReason('SKIP: клиент ругается, вопроса нет.') === 'клиент ругается, вопроса нет', 'Reason extracted');
+        self::assert(TelegramSuggest::skipReason('SKIP') === '', 'No reason');
+        self::assert(TelegramSuggest::buildNoSuggestion('нужна проверка оплаты') === '💡 Подсказки нет: нужна проверка оплаты. Ответьте сами.', 'Note with reason');
+        self::assert(TelegramSuggest::buildNoSuggestion('') === '💡 Подсказки нет. Ответьте сами.', 'Note without reason');
         echo "  [PASS] isSkip\n";
     }
 

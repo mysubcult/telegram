@@ -26,7 +26,9 @@ class TelegramSuggest
     const CALLBACK_DISMISS = 'sgx';
     const CALLBACK_GENERATE = 'sgg';
     const COMMAND = '!?';
-    const NO_SUGGESTION = '💡 Подсказки нет: в базе знаний не нашлось уверенного ответа, ответьте сами.';
+    const NO_SUGGESTION = '💡 Подсказки нет';
+    const REQUEST_FAILED = '⚠️ Не удалось получить подсказку: ИИ не ответил. Попробуйте «!?» ещё раз.';
+    const CHAT_CLOSED = '💡 Подсказки нет: чат уже закрыт.';
 
     public static function getSettings()
     {
@@ -49,10 +51,25 @@ class TelegramSuggest
         return mb_strlen($text) >= 2 && strpos($text, '/') !== 0;
     }
 
+    // "SKIP" or "SKIP: reason for the operator"
     public static function isSkip($text)
     {
         $text = trim((string)$text);
-        return $text === '' || preg_match('/^\W*SKIP\W*$/iu', $text) === 1;
+        return $text === '' || preg_match('/^\W*SKIP(?:\W*$|\s*[:\-—–])/iu', $text) === 1;
+    }
+
+    public static function skipReason($text)
+    {
+        if (preg_match('/^\W*SKIP\s*[:\-—–]\s*(.+)$/isu', trim((string)$text), $m)) {
+            $reason = trim(preg_replace('/\s+/u', ' ', $m[1]), " \t.");
+            return mb_strlen($reason) > 120 ? rtrim(mb_substr($reason, 0, 119)) . '…' : $reason;
+        }
+        return '';
+    }
+
+    public static function buildNoSuggestion($reason)
+    {
+        return self::NO_SUGGESTION . ($reason !== '' ? ': ' . $reason : '') . '. Ответьте сами.';
     }
 
     // "💡 Подсказка на «visitor text»:" — shows which message the suggestion answers
@@ -300,7 +317,7 @@ class TelegramSuggest
         );
 
         if ((int)($response['http_code'] ?? 0) !== 200) {
-            return '';
+            return array('text' => '', 'reason' => '', 'error' => true);
         }
 
         $data = json_decode((string)($response['content_raw'] ?? ''), true);
@@ -311,7 +328,11 @@ class TelegramSuggest
             }
         }
 
-        return self::isSkip($text) ? '' : trim($text);
+        if (self::isSkip($text)) {
+            return array('text' => '', 'reason' => self::skipReason($text), 'error' => trim($text) === '');
+        }
+
+        return array('text' => trim($text), 'reason' => '', 'error' => false);
     }
 
     // Resque job
@@ -337,7 +358,14 @@ class TelegramSuggest
         $chat = \erLhcoreClassModelChat::fetch($chatId);
         $msg = \erLhcoreClassModelmsg::fetch($msgId);
 
-        if (!($chat instanceof \erLhcoreClassModelChat) || !($msg instanceof \erLhcoreClassModelmsg) || (int)$msg->chat_id !== $chatId || (int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
+        if (!($chat instanceof \erLhcoreClassModelChat) || !($msg instanceof \erLhcoreClassModelmsg) || (int)$msg->chat_id !== $chatId) {
+            return;
+        }
+
+        if ((int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
+            if ($manual === true) {
+                self::postSuggestion($chat, $msg, '', self::CHAT_CLOSED);
+            }
             return;
         }
 
@@ -346,17 +374,19 @@ class TelegramSuggest
             return;
         }
 
-        $suggestion = self::requestSuggestion($chat, $msg, $settings['rest_api_id']);
+        $result = self::requestSuggestion($chat, $msg, $settings['rest_api_id']);
 
-        if ($manual === false && ($suggestion === '' || self::hasNewerMessages($chatId, $msgId))) {
+        if ($manual === false && ($result['text'] === '' || self::hasNewerMessages($chatId, $msgId))) {
             return;
         }
 
-        // Operator asked explicitly, so an empty answer is reported too
-        self::postSuggestion($chat, $msg, $suggestion);
+        // Operator asked explicitly, so an empty answer or a failure is reported too
+        $note = $result['error'] === true ? self::REQUEST_FAILED : self::buildNoSuggestion($result['reason']);
+        self::postSuggestion($chat, $msg, $result['text'], $note);
     }
 
-    public static function postSuggestion($chat, $msg, $suggestion)
+    // $suggestion with Send/Dismiss buttons, or $note (no suggestion) with Dismiss only
+    public static function postSuggestion($chat, $msg, $suggestion, $note = '')
     {
         foreach (self::getOperatorTopics($chat) as $tchat) {
 
@@ -366,7 +396,7 @@ class TelegramSuggest
             $data = array(
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
-                'text' => $suggestion !== '' ? self::buildHeader($msg->msg) . "\n\n" . $suggestion : self::NO_SUGGESTION,
+                'text' => $suggestion !== '' ? self::buildHeader($msg->msg) . "\n\n" . $suggestion : ($note !== '' ? $note : self::buildNoSuggestion('')),
                 'disable_web_page_preview' => true,
                 'reply_markup' => self::buildKeyboard($chat->id, $suggestion !== ''),
             );
@@ -413,11 +443,13 @@ class TelegramSuggest
         $groupChatId = $message->getChat()->getId();
         $topicMsgId = (int)$message->getMessageId();
 
+        // Any group member sees the buttons, only registered operators may use them
+        $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
+        if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
+            return 'Оператор не найден';
+        }
+
         if ($action === self::CALLBACK_GENERATE) {
-            $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
-            if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
-                return 'Оператор не найден';
-            }
             if (self::getSettings()['enabled'] === false) {
                 return 'Подсказки выключены';
             }
@@ -431,11 +463,6 @@ class TelegramSuggest
                 \Longman\TelegramBot\Request::editMessageReplyMarkup(['chat_id' => $groupChatId, 'message_id' => $topicMsgId, 'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([])]);
             }
             return 'Подсказка скрыта';
-        }
-
-        $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
-        if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
-            return 'Оператор не найден';
         }
 
         $chat = \erLhcoreClassModelChat::fetch((int)$chatId);

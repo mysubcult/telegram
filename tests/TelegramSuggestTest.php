@@ -25,6 +25,7 @@ class TelegramSuggestTest
         self::testExtractSuggestion();
         self::testKeyboard();
         self::testShiftHistory();
+        self::testIsSuggestCommand();
 
         echo "All TelegramSuggestTest passed successfully! [OK]\n";
     }
@@ -62,6 +63,11 @@ class TelegramSuggestTest
         $text = 'Оформить можно здесь: https://смартдиаг.рф/subscriptions';
         self::assert(TelegramSuggest::extractSuggestion(TelegramSuggest::HEADER . "\n\n" . $text) === $text, 'Header is stripped');
         self::assert(TelegramSuggest::extractSuggestion("Строка 1\n\nСтрока 2") === "Строка 1\n\nСтрока 2", 'Text without header is kept');
+        $header = TelegramSuggest::buildHeader('Откуда скачать приложение?');
+        self::assert($header === '💡 Подсказка на «Откуда скачать приложение?»:', 'Header names the message: ' . $header);
+        self::assert(TelegramSuggest::extractSuggestion($header . "\n\n" . "Строка 1\n\nСтрока 2") === "Строка 1\n\nСтрока 2", 'Header with quote is stripped, text keeps blank lines');
+        self::assert(mb_strlen(TelegramSuggest::buildHeader(str_repeat('а', 100))) < 80, 'Long message is shortened');
+        self::assert(TelegramSuggest::buildHeader(' [file=1_abc]') === '💡 Подсказка на «📎»:', 'File becomes a clip');
         echo "  [PASS] extractSuggestion\n";
     }
 
@@ -91,6 +97,17 @@ class TelegramSuggestTest
         self::assert(TelegramSuggest::shiftHistory('{previous_visitor_messages_list_url__10}', 2) === '{previous_visitor_messages_list_url__10__2}', 'Missing offset becomes explicit');
         self::assert(TelegramSuggest::shiftHistory($body, 0) === str_replace('__20__0', '__20__0', $body), 'Zero offset keeps body');
         echo "  [PASS] shiftHistory\n";
+    }
+
+    private static function testIsSuggestCommand()
+    {
+        foreach (array('!?', ' !? ') as $text) {
+            self::assert(TelegramSuggest::isSuggestCommand($text) === true, 'Command: ' . json_encode($text));
+        }
+        foreach (array('!? спасибо', '?', '!note', 'Что?!?') as $text) {
+            self::assert(TelegramSuggest::isSuggestCommand($text) === false, 'Not a command: ' . json_encode($text));
+        }
+        echo "  [PASS] isSuggestCommand\n";
     }
 }
 

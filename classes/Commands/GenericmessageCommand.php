@@ -405,6 +405,19 @@ class GenericmessageCommand extends SystemCommand
                         $messagesProcessed = [];
                         $alwaysProcess = false;
 
+                        // "!?" asks for a reply suggestion, it never reaches the visitor
+                        if (\LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::isSuggestCommand($text)) {
+                            $suggestError = \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleCommand($chat, $message, $topicNamespace);
+                            if ($suggestError !== '') {
+                                return Request::sendMessage([
+                                    'chat_id' => $chat_id,
+                                    'message_thread_id' => $message->getMessageThreadId(),
+                                    'text' => '[[System Assistant]] ' . $suggestError,
+                                ]);
+                            }
+                            return Request::emptyResponse();
+                        }
+
                         if (strpos(trim($text), '!') === 0) {
 
                             $lastMessageId = $chat->last_msg_id;

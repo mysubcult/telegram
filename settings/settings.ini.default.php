@@ -6,6 +6,13 @@ return array(
     'convert_ogg' => false,
     'convert_to' => 'wav',
     'convert_command' => 'avconv -i {file_orig} {file_dest}',
+    // Reply suggestions in operator topics, see providers/TelegramSuggest.php
+    'suggest' => array(
+        'enabled' => false,
+        'rest_api_id' => 0,
+        'dep_ids' => array(), // empty = all departments
+        'delay' => 4 // seconds to wait for operator's own reply
+    ),
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'
     )

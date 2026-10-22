@@ -52,6 +52,9 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 - A resque job (`lhc_telegram_suggest`) calls LHC REST API `rest_api_id` (105 «Смарти | Подсказки оператору»).
   The prompt, model and history template live in that REST API record in LHC admin, not in code. History ends at
   the chosen message: `shiftHistory` adds an offset to `{previous_visitor_messages_list_url__20__N}`.
+- REST 105's system text starts with `{suggest_prompt_from_rest_api__104}`: `injectPrompts` replaces it with the
+  current system prompt of the main bot (REST 104), so suggestions follow its rules; REST 105 adds only the
+  operator-mode section after it. Edit the main prompt in REST 104 only.
 - The suggestion arrives as a reply to the chosen message with «✅ Отправить» (`sgs||chat`) / «✖️» (`sgx||chat`).
   Send posts the text as the operator's own message and maps it to the suggestion's topic message id.
 - Model answers `SKIP: <reason>` when there is nothing to suggest → «💡 Подсказки нет: <reason>».

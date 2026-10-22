@@ -25,6 +25,7 @@ class TelegramSuggestTest
         self::testExtractSuggestion();
         self::testKeyboard();
         self::testShiftHistory();
+        self::testExtractSystemText();
         self::testIsSuggestCommand();
 
         echo "All TelegramSuggestTest passed successfully! [OK]\n";
@@ -102,6 +103,15 @@ class TelegramSuggestTest
         self::assert(TelegramSuggest::shiftHistory('{previous_visitor_messages_list_url__10}', 2) === '{previous_visitor_messages_list_url__10__2}', 'Missing offset becomes explicit');
         self::assert(TelegramSuggest::shiftHistory($body, 0) === str_replace('__20__0', '__20__0', $body), 'Zero offset keeps body');
         echo "  [PASS] shiftHistory\n";
+    }
+
+    private static function testExtractSystemText()
+    {
+        $body = "{\n  \"system_instruction\": {\n    \"parts\": [\n      {\n        \"text\": \"Ты — \\\"Смарти\\\".\\nПравила\"\n      }\n    ]\n  },\n  \"contents\": [{previous_visitor_messages_list_url__20__0}]\n}";
+        self::assert(TelegramSuggest::extractSystemText($body) === 'Ты — \\"Смарти\\".\\nПравила', 'Escaped prompt is extracted as is');
+        self::assert(json_decode('"' . TelegramSuggest::extractSystemText($body) . '"') === "Ты — \"Смарти\".\nПравила", 'Extracted text stays valid JSON string content');
+        self::assert(TelegramSuggest::extractSystemText('{"contents": []}') === '', 'No system instruction gives empty string');
+        echo "  [PASS] extractSystemText\n";
     }
 
     private static function testIsSuggestCommand()

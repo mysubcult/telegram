@@ -292,6 +292,27 @@ class TelegramSuggest
         }, (string)$bodyRaw);
     }
 
+    // System prompt of a REST API body as an escaped JSON string content, '' when there is none
+    public static function extractSystemText($bodyRaw)
+    {
+        if (preg_match('/"system_instruction"\s*:\s*\{\s*"parts"\s*:\s*\[\s*\{\s*"text"\s*:\s*"((?:[^"\\\\]++|\\\\.)*+)"/s', (string)$bodyRaw, $m)) {
+            return $m[1];
+        }
+        return '';
+    }
+
+    // {suggest_prompt_from_rest_api__N} → system prompt of REST API N, so suggestions follow the main bot's prompt
+    public static function injectPrompts($bodyRaw)
+    {
+        return preg_replace_callback('/\{suggest_prompt_from_rest_api__([0-9]+)\}/', function ($m) {
+            $restAPI = \erLhcoreClassModelGenericBotRestAPI::fetch((int)$m[1]);
+            if (!($restAPI instanceof \erLhcoreClassModelGenericBotRestAPI) || empty($restAPI->configuration_array['parameters'][0]['body_raw'])) {
+                return '';
+            }
+            return self::extractSystemText($restAPI->configuration_array['parameters'][0]['body_raw']);
+        }, (string)$bodyRaw);
+    }
+
     public static function requestSuggestion($chat, $msg, $restApiId)
     {
         $restAPI = \erLhcoreClassModelGenericBotRestAPI::fetch($restApiId);
@@ -308,7 +329,7 @@ class TelegramSuggest
             'filtergt' => array('id' => $msg->id),
             'filternotlikefields' => [['meta_msg' => '"debug":true'], ['meta_msg' => '{"content":{"typing"'], ['meta_msg' => '{"content":{"execute_js"']]
         ));
-        $method['body_raw'] = self::shiftHistory($method['body_raw'], $newer);
+        $method['body_raw'] = self::shiftHistory(self::injectPrompts($method['body_raw']), $newer);
 
         $response = \erLhcoreClassGenericBotActionRestapi::makeRequest(
             $restAPI->configuration_array['host'],

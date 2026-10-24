@@ -11,6 +11,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * and edits the "preparing…" message into the proposal with ✅ / ✖️. The buttons only change the status here;
  * the service applies an approved edit and reports the result in the same message.
  * "/fix ..." as a reply to a proposal asks for a revised proposal.
+ * "/fix" without text in the digest topic, or the button under the digest, lists the proposals waiting for a decision,
+ * each with ✅ / ✖️ and a link to the full proposal.
  *
  * Statuses: new → proposed → approved → applied | failed; proposed → rejected; new/proposed → revised (a child request).
  */
@@ -18,6 +20,7 @@ class TelegramFix
 {
     const CALLBACK_APPLY = 'fxa';
     const CALLBACK_REJECT = 'fxr';
+    const CALLBACK_LIST = 'fxl';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
 
     public static function getSession()
@@ -67,6 +70,10 @@ class TelegramFix
         $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $bot->id, 'confirmed' => 1, 'tuser_id' => $message->getFrom()->getId())));
         if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
             return \Longman\TelegramBot\Request::emptyResponse();
+        }
+
+        if ($comment === '' && $threadId > 0 && $threadId === self::digestTopicId($bot)) {
+            return self::listPending($bot, $groupChatId, $threadId);
         }
 
         if ($comment === '') {
@@ -127,6 +134,46 @@ class TelegramFix
         return $ack;
     }
 
+    public static function topicLink($groupChatId, $threadId, $msgId)
+    {
+        return 'https://t.me/c/' . preg_replace('/^-100/', '', (string)$groupChatId) . '/' . (int)$threadId . '/' . (int)$msgId;
+    }
+
+    // One message per proposal waiting for ✅ / ✖️ (newest last), the buttons work the same as under the proposal itself
+    public static function listPending($bot, $groupChatId, $threadId)
+    {
+        $db = \ezcDbInstance::get();
+        $stmt = $db->prepare("SELECT id, thread_id, status_msg_id, chat_id, operator_name, comment, proposal, ctime FROM lhc_telegram_fix WHERE bot_id = :bot_id AND status = 'proposed' ORDER BY id LIMIT 15");
+        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        if (empty($rows)) {
+            return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'text' => '✅ Правок, ждущих решения, нет.'));
+        }
+
+        $response = null;
+        foreach ($rows as $row) {
+            $proposal = json_decode((string)$row['proposal'], true);
+            $where = array('prompt' => 'промпт ассистента', 'suggest_prompt' => 'промпт подсказок', 'site' => 'сайт', 'doc' => 'база знаний');
+            $text = '🛠 Правка #' . $row['id'] . ' (' . ($where[$proposal['target'] ?? ''] ?? '') . (!empty($proposal['path']) ? ': ' . $proposal['path'] : '') . ")\n"
+                . ($proposal['summary'] ?? '') . "\n\n"
+                . '💬 ' . $row['operator_name'] . ', ' . date('d.m H:i', $row['ctime']) . ($row['chat_id'] > 0 ? ', чат #' . $row['chat_id'] : '') . ': «' . mb_substr($row['comment'], 0, 200) . '»';
+            $response = self::send($bot, array(
+                'chat_id' => $groupChatId,
+                'message_thread_id' => $threadId,
+                'disable_notification' => true,
+                'text' => $text,
+                'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard(
+                    [['text' => '📄 Было / станет', 'url' => self::topicLink($groupChatId, $row['thread_id'], $row['status_msg_id'])]],
+                    [['text' => '✅ Применить', 'callback_data' => self::CALLBACK_APPLY . '||' . $row['id']], ['text' => '✖️ Отклонить', 'callback_data' => self::CALLBACK_REJECT . '||' . $row['id']]]
+                ),
+            ));
+        }
+
+        return $response;
+    }
+
     public static function setStatus($id, $status)
     {
         $db = \ezcDbInstance::get();
@@ -150,6 +197,12 @@ class TelegramFix
      */
     public static function handleCallback($callbackQuery, $bot, $action, $fixId)
     {
+        if ($action === self::CALLBACK_LIST) {
+            $message = $callbackQuery->getMessage();
+            self::listPending($bot, $message->getChat()->getId(), (int)$message->getMessageThreadId());
+            return 'Список правок ниже';
+        }
+
         $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $bot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
         if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
             return 'Оператор не найден';
@@ -170,6 +223,15 @@ class TelegramFix
 
         self::setStatus($fixId, $action === self::CALLBACK_APPLY ? 'approved' : 'rejected');
         $db->commit();
+
+        // Decided from the list in the digest: the proposal itself must not keep its buttons
+        $stmt = $db->prepare('SELECT status_msg_id FROM lhc_telegram_fix WHERE id = :id');
+        $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
+        $stmt->execute();
+        $statusMsgId = (int)$stmt->fetchColumn();
+        if ($statusMsgId > 0 && $statusMsgId !== (int)$callbackQuery->getMessage()->getMessageId() && $action === self::CALLBACK_REJECT) {
+            self::clearButtons($bot, $callbackQuery->getMessage()->getChat()->getId(), $statusMsgId);
+        }
 
         $message = $callbackQuery->getMessage();
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);

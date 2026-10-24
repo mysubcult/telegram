@@ -28,10 +28,13 @@ class TelegramTopicCommands
 
     public static function buildMenu($bot)
     {
-        $menu = array(array('command' => 'hint', 'description' => 'Подсказка ответа от ИИ (как «!?»)'));
+        $menu = array(
+            array('command' => 'hint', 'description' => 'Подсказка ответа от ИИ (как «!?»)'),
+            array('command' => 'fix', 'description' => 'Ассистент ошибся: что исправить (ответом на сообщение)'),
+        );
 
         foreach (explode(', ', self::normalizeList($bot->topic_commands)) as $name) {
-            if ($name === '' || $name === 'hint' || $name === 'endchat') {
+            if ($name === '' || $name === 'hint' || $name === 'fix' || $name === 'endchat') {
                 continue;
             }
             $command = \erLhcoreClassModelGenericBotCommand::findOne(array('filter' => array('command' => $name)));

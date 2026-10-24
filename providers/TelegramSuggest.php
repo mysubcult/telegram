@@ -29,6 +29,12 @@ class TelegramSuggest
     const NO_SUGGESTION = '💡 Подсказки нет';
     const REQUEST_FAILED = '⚠️ Не удалось получить подсказку: ИИ не ответил. Попробуйте «!?» ещё раз.';
     const CHAT_CLOSED = '💡 Подсказки нет: чат уже закрыт.';
+    const MAX_FILES = 4;
+    const MAX_FILE_BYTES = 10485760;
+
+    // inlineData parts the next REST request gets, see requestSuggestion()
+    private static $pendingFiles = array();
+    private static $listening = false;
 
     public static function getSettings()
     {
@@ -313,6 +319,75 @@ class TelegramSuggest
         }, (string)$bodyRaw);
     }
 
+    // Files of the visitor's turn the suggestion is for: the target message and the visitor messages right before it
+    // (photo first, question after). The bot sees files through its media trigger, which does not run once an operator
+    // took the chat, so the history placeholder drops them.
+    public static function collectFiles($chat, $msg)
+    {
+        $files = array();
+        $messages = \erLhcoreClassModelmsg::getList(array('filter' => array('chat_id' => $chat->id), 'filterlte' => array('id' => $msg->id), 'sort' => 'id DESC', 'limit' => 10));
+
+        foreach ($messages as $item) {
+            if ((int)$item->user_id !== 0) {
+                // Bot service messages (typing, as_json media) do not end the visitor's turn
+                if ((int)$item->user_id === -1 || ((int)$item->user_id === -2 && trim($item->msg) === '')) {
+                    continue;
+                }
+                break;
+            }
+            preg_match_all('/\[file="?([0-9]+)_([a-f0-9]+)"?\]/i', (string)$item->msg, $matches);
+            foreach (array_reverse(array_keys($matches[1])) as $index) {
+                $file = \erLhcoreClassModelChatFile::fetch((int)$matches[1][$index]);
+                if (!($file instanceof \erLhcoreClassModelChatFile) || $file->security_hash !== $matches[2][$index] || (int)$file->chat_id !== (int)$chat->id) {
+                    continue;
+                }
+                $type = strtolower((string)$file->type);
+                if (!preg_match('#^(image/(jpeg|png|webp|gif)|audio/|application/pdf$)#', $type) || !is_file($file->file_path_server) || filesize($file->file_path_server) > self::MAX_FILE_BYTES) {
+                    continue;
+                }
+                $files[] = $file;
+                if (count($files) >= self::MAX_FILES) {
+                    break 2;
+                }
+            }
+        }
+
+        return array_reverse($files);
+    }
+
+    // Gemini-style parts for the worker: images go to the model, voice is transcribed, PDF is read as text
+    public static function buildFileParts(array $files)
+    {
+        if (empty($files)) {
+            return array();
+        }
+        $parts = array(array('text' => 'Вложения клиента к этому сообщению (' . count($files) . '):'));
+        foreach ($files as $file) {
+            $parts[] = array('inlineData' => array('mimeType' => strtolower((string)$file->type), 'data' => base64_encode(file_get_contents($file->file_path_server))));
+        }
+        return $parts;
+    }
+
+    // Listener for chat.rest_api_make_request: appends the pending files to the last turn of the request body
+    public static function attachPendingFiles($params)
+    {
+        if (empty(self::$pendingFiles) || !isset($params['params_request']['body'], $params['ch'])) {
+            return;
+        }
+
+        $parts = self::$pendingFiles;
+        self::$pendingFiles = array();
+
+        $body = json_decode((string)$params['params_request']['body'], true);
+        if (!is_array($body) || empty($body['contents'])) {
+            return;
+        }
+
+        $last = count($body['contents']) - 1;
+        $body['contents'][$last]['parts'] = array_merge((array)($body['contents'][$last]['parts'] ?? array()), $parts);
+        curl_setopt($params['ch'], CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
     public static function requestSuggestion($chat, $msg, $restApiId)
     {
         $restAPI = \erLhcoreClassModelGenericBotRestAPI::fetch($restApiId);
@@ -331,11 +406,19 @@ class TelegramSuggest
         ));
         $method['body_raw'] = self::shiftHistory(self::injectPrompts($method['body_raw']), $newer);
 
+        if (self::$listening === false) {
+            \erLhcoreClassChatEventDispatcher::getInstance()->listen('chat.rest_api_make_request', self::class . '::attachPendingFiles');
+            self::$listening = true;
+        }
+        self::$pendingFiles = self::buildFileParts(self::collectFiles($chat, $msg));
+
         $response = \erLhcoreClassGenericBotActionRestapi::makeRequest(
             $restAPI->configuration_array['host'],
             $method,
             array('rest_api' => $restAPI, 'action' => array(), 'rest_api_method_params' => array(), 'chat' => $chat, 'params' => array('msg' => $msg))
         );
+
+        self::$pendingFiles = array();
 
         if ((int)($response['http_code'] ?? 0) !== 200) {
             return array('text' => '', 'reason' => '', 'error' => true);

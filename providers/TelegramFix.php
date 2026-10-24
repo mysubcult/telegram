@@ -15,7 +15,9 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * "/fix" without text in the digest topic, or the button under the digest, lists the proposals waiting for a decision,
  * each with ✅ / ✖️ and a link to the full proposal.
  *
- * Statuses: new → proposed → approved → applied | failed; proposed → rejected; new/proposed → revised (a child request).
+ * Statuses: new → working → proposed → approved → applying → [deploying →] applied | failed; proposed → rejected;
+ * new/working/proposed → revised (a child request). A reply to an applied or rejected fix starts a follow-up with parent_id.
+ * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
  */
 class TelegramFix
 {
@@ -100,6 +102,14 @@ class TelegramFix
         // A reply to a proposal asks to rework it
         $parent = self::findByStatusMessage($bot, $replyTopicMsgId);
 
+        // The replied message as the operator saw it: a suggestion or a service message is not in the chat history
+        $raw = \erLhcoreClassExtensionLhctelegram::getTelegramRawMessageData($message);
+        $replied = $replyTopicMsgId > 0 && $parent === null && isset($raw['reply_to_message']) && is_array($raw['reply_to_message']) ? $raw['reply_to_message'] : array();
+        $targetText = array_filter(array(
+            'text' => mb_substr((string)($replied['text'] ?? $replied['caption'] ?? ''), 0, 3000),
+            'quote' => $parent === null ? mb_substr((string)($replyData['quote_text'] ?? ''), 0, 1000) : '',
+        ), 'strlen');
+
         $chatId = 0;
         $tchat = \erLhcoreClassModelTelegramChat::findOne(array('filter' => array('bot_id' => $bot->id, 'tchat_id' => $threadId, 'type' => 1)));
         if ($tchat instanceof \erLhcoreClassModelTelegramChat) {
@@ -124,12 +134,13 @@ class TelegramFix
         ));
 
         $db = \ezcDbInstance::get();
-        $stmt = $db->prepare('INSERT INTO lhc_telegram_fix (status, bot_id, group_chat_id, thread_id, chat_id, target_msg_id, request_msg_id, status_msg_id, parent_id, operator_user_id, operator_name, comment, proposal, result, ctime, utime) VALUES (\'new\', :bot_id, :group_chat_id, :thread_id, :chat_id, :target_msg_id, :request_msg_id, :status_msg_id, :parent_id, :operator_user_id, :operator_name, :comment, \'\', \'\', :ctime, :utime)');
+        $stmt = $db->prepare('INSERT INTO lhc_telegram_fix (status, bot_id, group_chat_id, thread_id, chat_id, target_msg_id, target_text, request_msg_id, status_msg_id, parent_id, operator_user_id, operator_name, comment, proposal, result, ctime, utime) VALUES (\'new\', :bot_id, :group_chat_id, :thread_id, :chat_id, :target_msg_id, :target_text, :request_msg_id, :status_msg_id, :parent_id, :operator_user_id, :operator_name, :comment, \'\', \'\', :ctime, :utime)');
         $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
         $stmt->bindValue(':group_chat_id', (string)$groupChatId, \PDO::PARAM_STR);
         $stmt->bindValue(':thread_id', $threadId, \PDO::PARAM_INT);
         $stmt->bindValue(':chat_id', $chatId, \PDO::PARAM_INT);
         $stmt->bindValue(':target_msg_id', $targetMsgId, \PDO::PARAM_INT);
+        $stmt->bindValue(':target_text', empty($targetText) ? '' : json_encode($targetText, JSON_UNESCAPED_UNICODE), \PDO::PARAM_STR);
         $stmt->bindValue(':request_msg_id', (int)$message->getMessageId(), \PDO::PARAM_INT);
         $stmt->bindValue(':status_msg_id', $ack->isOk() ? (int)$ack->getResult()->getMessageId() : 0, \PDO::PARAM_INT);
         $stmt->bindValue(':parent_id', $parent !== null ? (int)$parent['id'] : 0, \PDO::PARAM_INT);
@@ -140,9 +151,12 @@ class TelegramFix
         $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
         $stmt->execute();
 
-        if ($parent !== null && $parent['status'] === 'proposed') {
+        // A proposal or a request still in work is replaced by the child (the service drops a late result of the parent)
+        if ($parent !== null && in_array($parent['status'], array('new', 'working', 'proposed'), true)) {
             self::setStatus((int)$parent['id'], 'revised');
-            self::clearAllButtons($bot, $parent);
+            if ($parent['status'] === 'proposed') {
+                self::clearAllButtons($bot, $parent);
+            }
         }
 
         return $ack;
@@ -163,6 +177,10 @@ class TelegramFix
     public static function proposalHtml($row)
     {
         $proposal = json_decode((string)$row['proposal'], true);
+        // The service stores the message it posted (a diff that fits Telegram's limit)
+        if (!empty($proposal['_html'])) {
+            return (string)$proposal['_html'];
+        }
         $labels = array('prompt' => 'Промпт ассистента', 'suggest_prompt' => 'Промпт подсказок оператору', 'site' => 'Сайт', 'doc' => 'База знаний');
         $where = $labels[$proposal['target'] ?? ''] ?? '';
         if (!empty($proposal['path'])) {

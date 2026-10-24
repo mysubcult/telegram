@@ -18,6 +18,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * Statuses: new → working → proposed → approved → applying → [deploying →] applied | failed; proposed → rejected;
  * new/working/proposed → revised (a child request). A reply to an applied or rejected fix starts a follow-up with parent_id.
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
+ * The daily digest posts fixes it suggests itself (status suggested): "🛠 Сделать правку" turns one into a usual request (new),
+ * "✖️ Не нужно" → dismissed; a text reply to it is a request of its own with the suggestion as the parent.
  */
 class TelegramFix
 {
@@ -25,6 +27,8 @@ class TelegramFix
     const CALLBACK_REJECT = 'fxr';
     const CALLBACK_LIST = 'fxl';
     const CALLBACK_EDIT = 'fxe';
+    const CALLBACK_SUGGESTED_TAKE = 'fxs';
+    const CALLBACK_SUGGESTED_DISMISS = 'fxn';
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
 
@@ -152,7 +156,7 @@ class TelegramFix
         $stmt->execute();
 
         // A proposal or a request still in work is replaced by the child (the service drops a late result of the parent)
-        if ($parent !== null && in_array($parent['status'], array('new', 'working', 'proposed'), true)) {
+        if ($parent !== null && in_array($parent['status'], array('new', 'working', 'proposed', 'suggested'), true)) {
             self::setStatus((int)$parent['id'], 'revised');
             if ($parent['status'] === 'proposed') {
                 self::clearAllButtons($bot, $parent);
@@ -293,6 +297,10 @@ class TelegramFix
             return 'Оператор не найден';
         }
 
+        if ($action === self::CALLBACK_SUGGESTED_TAKE || $action === self::CALLBACK_SUGGESTED_DISMISS) {
+            return self::handleSuggested($callbackQuery, $bot, $action, $fixId, $operator);
+        }
+
         $db = \ezcDbInstance::get();
         $db->beginTransaction();
         $stmt = $db->prepare('SELECT status FROM lhc_telegram_fix WHERE id = :id AND bot_id = :bot_id FOR UPDATE');
@@ -329,5 +337,38 @@ class TelegramFix
         ));
 
         return $action === self::CALLBACK_APPLY ? 'Применяю правку' : 'Правка отклонена';
+    }
+
+    // A fix suggested by the digest: the operator who takes it becomes its author, the message turns into "preparing…"
+    private static function handleSuggested($callbackQuery, $bot, $action, $fixId, $operator)
+    {
+        $take = $action === self::CALLBACK_SUGGESTED_TAKE;
+        $message = $callbackQuery->getMessage();
+
+        $db = \ezcDbInstance::get();
+        $stmt = $db->prepare("UPDATE lhc_telegram_fix SET status = :status, operator_user_id = :operator_user_id, operator_name = :operator_name, status_msg_id = :status_msg_id, utime = :utime WHERE id = :id AND bot_id = :bot_id AND status = 'suggested'");
+        $stmt->bindValue(':status', $take ? 'new' : 'dismissed', \PDO::PARAM_STR);
+        $stmt->bindValue(':operator_user_id', (int)$operator->user_id, \PDO::PARAM_INT);
+        $stmt->bindValue(':operator_name', (string)$operator->user->name_support, \PDO::PARAM_STR);
+        $stmt->bindValue(':status_msg_id', (int)$message->getMessageId(), \PDO::PARAM_INT);
+        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
+        $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
+        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        if ($stmt->rowCount() === 0) {
+            return 'Уже обработано';
+        }
+
+        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+        \Longman\TelegramBot\Request::editMessageText(array(
+            'chat_id' => $message->getChat()->getId(),
+            'message_id' => $message->getMessageId(),
+            'text' => ($take ? '🛠 Готовлю правку, обычно это 1–3 минуты… (' : '✖️ Не нужно (') . $operator->user->name_support . ")\n\n" . $message->getText(),
+            'disable_web_page_preview' => true,
+            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
+        ));
+
+        return $take ? 'Готовлю правку' : 'Убрано';
     }
 }

@@ -575,8 +575,27 @@ class TelegramLiveHelperChatOperator {
         return false;
     }
 
+    // Bot option "Disable link previews in topics": text sent to the operators group goes without the link preview
+    public static function applyLinkPreviewOption(array $data)
+    {
+        if (!isset($data['chat_id']) || isset($data['link_preview_options']) || isset($data['disable_web_page_preview'])) {
+            return $data;
+        }
+
+        // Not cached: resque workers live long and the option can be switched any time
+        if (\erLhcoreClassModelTelegramBot::getCount(array('filter' => array('group_chat_id' => (string)$data['chat_id'], 'disable_link_preview' => 1))) > 0) {
+            $data['link_preview_options'] = array('is_disabled' => true);
+        }
+
+        return $data;
+    }
+
     public static function sendTelegramRequest($method, array $data, $multipartFilePath = '', $multipartFileField = '')
     {
+        if ($method === 'sendMessage') {
+            $data = self::applyLinkPreviewOption($data);
+        }
+
         $multipartFilePath = (string)$multipartFilePath;
         $multipartFileField = (string)$multipartFileField;
         $allowMessageSplit = ($method === 'sendMessage' && $multipartFilePath === '' && $multipartFileField === '');

@@ -332,6 +332,15 @@ class GenericmessageCommand extends SystemCommand
             // Keep the "/" menu of the group in line with the LHC commands (sent only when they changed)
             \LiveHelperChatExtension\lhctelegram\providers\TelegramTopicCommands::sync($tBot);
 
+            // Text in the digest topic is a correction of the AI assistant without a chat (providers/TelegramFix.php)
+            $digestTopicId = \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::digestTopicId($tBot);
+            if ($digestTopicId > 0 && (int)$message->getMessageThreadId() === $digestTopicId) {
+                if ($text !== '' && strpos($text, '/') !== 0 && strpos($text, '!') !== 0) {
+                    return \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::handleRequest($message, $tBot, $text);
+                }
+                return Request::emptyResponse();
+            }
+
             $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('tuser_id' => $message->getFrom()->getId(), 'confirmed' => 1, 'bot_id' => $tBot->id)));
 
             if ($operator instanceof \erLhcoreClassModelTelegramOperator) {

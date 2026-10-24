@@ -63,6 +63,13 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 - REST 105 uses the smarti-ai Cloudflare worker (`/root/smarti-ai`) with DeepSeek thinking mode. Its body must end
   with a `user` turn, otherwise DeepSeek rejects the request («reasoning_content must be passed back»).
 
+## Topic commands, file captions, /fix
+
+- `/name` in a topic = `!name` (`classes/Commands/GenericCommand.php`); `/hint` = `!?`. The "/" menu lists the bot option "Commands in the "/" menu of the group" (`lhc_telegram_bot.topic_commands`), `providers/TelegramTopicCommands.php` re-sends it on change. Do not use LHC core flags (e.g. "Enabled for display") for Telegram behaviour.
+- Bot option `disable_link_preview`: applied in `sendTelegramRequest()`, `sendTelegramRequestOnce()` and `sendTelegramMessageWithSplit()` (bot replies go through the last one directly).
+- `providers/TelegramFileCaption.php`: every visitor photo/voice/PDF is described once (resque → worker `deepseek-flash@describe`) into core `lh_chat_file.caption_ocr`; suggestions list the descriptions of earlier files. Setting `suggest.captions`.
+- `/fix …` (`providers/TelegramFix.php`) and text in the digest topic store a row in `lhc_telegram_fix`; buttons `fxa`/`fxr` only change its status. The AI part and applying edits run outside LHC: `/root/smartdiag-fix/fixbot.py` (root, systemd `smartdiag-fix.timer` every minute: DeepSeek key, git push to the docs repo, REST 104 prompt edits with backups in `/root/lhc-production-backups/fix/`, daily digest at 19:00 MSK into the topic stored in `cache/telegram_digest_topic_<bot>.json`).
+
 ## Working rules
 
 - Back up before touching live data: `/root/lhc-production-backups/<what>-<date>/`.

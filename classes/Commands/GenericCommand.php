@@ -55,6 +55,14 @@ class GenericCommand extends SystemCommand
         $user_id = $message->getFrom()->getId();
         $command = $message->getCommand();
 
+        // "/fix what is wrong" — a correction of the AI assistant (providers/TelegramFix.php)
+        if ((int)$message->getMessageThreadId() > 0 && strtolower((string)$command) === 'fix') {
+            $tBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
+            if (is_object($tBot) && (int)$tBot->bot_client === 1) {
+                return \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::handleRequest($message, $tBot, trim((string)preg_replace('/^\/\S+/u', '', trim((string)$message->getText()))));
+            }
+        }
+
         // In an operator topic "/sbp" works as the LHC command "!sbp" and "/hint" as the reply suggestion "!?",
         // so the commands can be picked from the Telegram command menu
         if ((int)$message->getMessageThreadId() > 0 && ($bangText = self::topicCommandToBang((string)$command, (string)$message->getText())) !== null) {

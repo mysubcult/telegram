@@ -34,7 +34,7 @@ class TelegramTopicCommands
         );
 
         foreach (explode(', ', self::normalizeList($bot->topic_commands)) as $name) {
-            if ($name === '' || $name === 'hint' || $name === 'fix' || $name === 'endchat') {
+            if ($name === '' || in_array($name, array('hint', 'fix', 'ban', 'endchat'), true)) {
                 continue;
             }
             $command = \erLhcoreClassModelGenericBotCommand::findOne(array('filter' => array('command' => $name)));
@@ -45,6 +45,7 @@ class TelegramTopicCommands
             $menu[] = array('command' => $name, 'description' => mb_substr($description !== '' ? $description : '!' . $name, 0, 256));
         }
 
+        $menu[] = array('command' => 'ban', 'description' => 'Заблокировать посетителя на 30 дней и закрыть чат');
         $menu[] = array('command' => 'endchat', 'description' => 'Закрыть чат');
 
         return $menu;

@@ -12,7 +12,8 @@ return array(
         'mode' => 'command', // 'command' = only «!?» in the topic, 'button' = «💡 Ответ» under visitor messages, 'auto' = after every visitor message
         'rest_api_id' => 0,
         'dep_ids' => array(), // empty = all departments
-        'delay' => 4 // auto mode: seconds to wait for operator's own reply
+        'delay' => 4, // auto mode: seconds to wait for operator's own reply
+        'captions' => false // describe every visitor file once (caption_ocr), see providers/TelegramFileCaption.php
     ),
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'

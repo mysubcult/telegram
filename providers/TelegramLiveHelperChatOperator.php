@@ -23,6 +23,9 @@ class TelegramLiveHelperChatOperator {
         // Reply suggestions in operator topics (after messageAdded, so the topic already exists)
         $dispatcher->listen('chat.addmsguser', TelegramSuggest::class . '::visitorMessageAdded');
         $dispatcher->listen('chat.messages_added_passive', TelegramSuggest::class . '::visitorMessageAdded');
+
+        // Text descriptions of visitor files for the suggestions
+        $dispatcher->listen('file.uploadfile.file_store', TelegramFileCaption::class . '::fileStored');
     }
 
     public static function messageAddedAdmin($params)

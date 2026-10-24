@@ -368,6 +368,31 @@ class TelegramSuggest
         return $parts;
     }
 
+    // Descriptions (caption_ocr) of the visitor's earlier files in the chat — the history itself shows them only as [file=…]
+    public static function buildEarlierFilesText($chat, $msg, array $attachedFiles, $limit = 40)
+    {
+        $attachedIds = array_map(function ($file) { return (int)$file->id; }, $attachedFiles);
+        $lines = array();
+
+        $messages = \erLhcoreClassModelmsg::getList(array('filter' => array('chat_id' => $chat->id, 'user_id' => 0), 'filterlte' => array('id' => $msg->id), 'sort' => 'id DESC', 'limit' => $limit));
+        foreach (array_reverse($messages) as $item) {
+            preg_match_all('/\[file="?([0-9]+)_([a-f0-9]+)"?\]/i', (string)$item->msg, $matches);
+            foreach (array_keys($matches[1]) as $index) {
+                if (in_array((int)$matches[1][$index], $attachedIds, true)) {
+                    continue;
+                }
+                $file = \erLhcoreClassModelChatFile::fetch((int)$matches[1][$index]);
+                if (!($file instanceof \erLhcoreClassModelChatFile) || $file->security_hash !== $matches[2][$index] || trim((string)$file->caption_ocr) === '') {
+                    continue;
+                }
+                $kind = strpos((string)$file->type, 'audio/') === 0 ? 'голосовое' : ((string)$file->type === 'application/pdf' ? 'PDF' : 'фото');
+                $lines[] = '- ' . date('d.m H:i', $item->time) . ', ' . $kind . ': ' . preg_replace('/\s+/u', ' ', trim($file->caption_ocr));
+            }
+        }
+
+        return empty($lines) ? '' : "Файлы, которые клиент присылал раньше в этом чате (описание каждого):\n" . implode("\n", $lines);
+    }
+
     // Listener for chat.rest_api_make_request: appends the pending files to the last turn of the request body
     public static function attachPendingFiles($params)
     {
@@ -410,7 +435,12 @@ class TelegramSuggest
             \erLhcoreClassChatEventDispatcher::getInstance()->listen('chat.rest_api_make_request', self::class . '::attachPendingFiles');
             self::$listening = true;
         }
-        self::$pendingFiles = self::buildFileParts(self::collectFiles($chat, $msg));
+        $files = self::collectFiles($chat, $msg);
+        self::$pendingFiles = self::buildFileParts($files);
+        $earlierFiles = self::buildEarlierFilesText($chat, $msg, $files);
+        if ($earlierFiles !== '') {
+            array_unshift(self::$pendingFiles, array('text' => $earlierFiles));
+        }
 
         $response = \erLhcoreClassGenericBotActionRestapi::makeRequest(
             $restAPI->configuration_array['host'],

@@ -63,7 +63,8 @@ class TelegramFix
             return null;
         }
         $db = \ezcDbInstance::get();
-        $stmt = $db->prepare('SELECT * FROM lhc_telegram_fix WHERE bot_id = :bot_id AND status_msg_id = :msg_id LIMIT 1');
+        $stmt = $db->prepare('SELECT * FROM lhc_telegram_fix WHERE bot_id = :bot_id AND (status_msg_id = :msg_id OR FIND_IN_SET(:msg_id_set, extra_msg_ids) > 0) ORDER BY id DESC LIMIT 1');
+        $stmt->bindValue(':msg_id_set', (string)(int)$topicMsgId, \PDO::PARAM_STR);
         $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
         $stmt->bindValue(':msg_id', (int)$topicMsgId, \PDO::PARAM_INT);
         $stmt->execute();
@@ -141,7 +142,7 @@ class TelegramFix
 
         if ($parent !== null && $parent['status'] === 'proposed') {
             self::setStatus((int)$parent['id'], 'revised');
-            self::clearButtons($bot, $groupChatId, (int)$parent['status_msg_id']);
+            self::clearAllButtons($bot, $parent);
         }
 
         return $ack;
@@ -152,11 +153,47 @@ class TelegramFix
         return 'https://t.me/c/' . preg_replace('/^-100/', '', (string)$groupChatId) . '/' . (int)$threadId . '/' . (int)$msgId;
     }
 
-    // One message per proposal waiting for ✅ / ✖️ (newest last), the buttons work the same as under the proposal itself
+    private static function short($text, $limit)
+    {
+        $text = trim((string)$text);
+        return mb_strlen($text) <= $limit ? $text : rtrim(mb_substr($text, 0, $limit - 1)) . '…';
+    }
+
+    // The whole proposal as HTML (same layout as the service posts under the /fix request)
+    public static function proposalHtml($row)
+    {
+        $proposal = json_decode((string)$row['proposal'], true);
+        $labels = array('prompt' => 'Промпт ассистента', 'suggest_prompt' => 'Промпт подсказок оператору', 'site' => 'Сайт', 'doc' => 'База знаний');
+        $where = $labels[$proposal['target'] ?? ''] ?? '';
+        if (!empty($proposal['path'])) {
+            $where .= ': ' . htmlspecialchars($proposal['path'], ENT_NOQUOTES);
+        }
+        $e = function ($text) { return htmlspecialchars((string)$text, ENT_NOQUOTES); };
+
+        return '🛠 <b>Правка #' . (int)$row['id'] . '</b>: ' . $e($proposal['summary'] ?? '') . "\n"
+            . '📍 ' . $where . "\n"
+            . '💬 ' . $e($proposal['why'] ?? '') . "\n"
+            . '✍️ ' . $e($row['operator_name']) . ', ' . date('d.m H:i', $row['ctime']) . ((int)$row['chat_id'] > 0 ? ', чат #' . (int)$row['chat_id'] : '') . ': «' . $e(self::short($row['comment'], 300)) . "»\n\n"
+            . (!empty($proposal['replace_all']) ? "🔁 Во всех одинаковых местах файла\n" : '')
+            . "<b>Было:</b>\n<blockquote expandable>" . $e(self::short($proposal['old'] ?? '', 1300)) . "</blockquote>\n"
+            . "<b>Станет:</b>\n<blockquote expandable>" . $e(self::short($proposal['new'] ?? '', 1500)) . "</blockquote>\n"
+            . '<i>Дополнить или поправить — ответьте на это сообщение текстом.</i>';
+    }
+
+    public static function proposalKeyboard($fixId)
+    {
+        return new \Longman\TelegramBot\Entities\InlineKeyboard(
+            [['text' => '✅ Применить', 'callback_data' => self::CALLBACK_APPLY . '||' . (int)$fixId], ['text' => '✖️ Отклонить', 'callback_data' => self::CALLBACK_REJECT . '||' . (int)$fixId]],
+            [['text' => '✏️ Дополнить', 'callback_data' => self::CALLBACK_EDIT . '||' . (int)$fixId]]
+        );
+    }
+
+    // Every proposal waiting for a decision, in full, with the same buttons; a text reply to it revises it right there.
+    // The copies are remembered in extra_msg_ids, so replies and the final result reach them too.
     public static function listPending($bot, $groupChatId, $threadId)
     {
         $db = \ezcDbInstance::get();
-        $stmt = $db->prepare("SELECT id, thread_id, status_msg_id, chat_id, operator_name, comment, proposal, ctime FROM lhc_telegram_fix WHERE bot_id = :bot_id AND status = 'proposed' ORDER BY id LIMIT 15");
+        $stmt = $db->prepare("SELECT * FROM lhc_telegram_fix WHERE bot_id = :bot_id AND status = 'proposed' ORDER BY id LIMIT 15");
         $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
@@ -167,21 +204,23 @@ class TelegramFix
 
         $response = null;
         foreach ($rows as $row) {
-            $proposal = json_decode((string)$row['proposal'], true);
-            $where = array('prompt' => 'промпт ассистента', 'suggest_prompt' => 'промпт подсказок', 'site' => 'сайт', 'doc' => 'база знаний');
-            $text = '🛠 Правка #' . $row['id'] . ' (' . ($where[$proposal['target'] ?? ''] ?? '') . (!empty($proposal['path']) ? ': ' . $proposal['path'] : '') . ")\n"
-                . ($proposal['summary'] ?? '') . "\n\n"
-                . '💬 ' . $row['operator_name'] . ', ' . date('d.m H:i', $row['ctime']) . ($row['chat_id'] > 0 ? ', чат #' . $row['chat_id'] : '') . ': «' . mb_substr($row['comment'], 0, 200) . '»';
             $response = self::send($bot, array(
                 'chat_id' => $groupChatId,
                 'message_thread_id' => $threadId,
                 'disable_notification' => true,
-                'text' => $text,
-                'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard(
-                    [['text' => '📄 Было / станет', 'url' => self::topicLink($groupChatId, $row['thread_id'], $row['status_msg_id'])]],
-                    [['text' => '✅ Применить', 'callback_data' => self::CALLBACK_APPLY . '||' . $row['id']], ['text' => '✖️ Отклонить', 'callback_data' => self::CALLBACK_REJECT . '||' . $row['id']]]
-                ),
+                'parse_mode' => 'HTML',
+                'text' => self::proposalHtml($row),
+                'reply_markup' => self::proposalKeyboard($row['id']),
             ));
+
+            if ($response->isOk()) {
+                $ids = array_filter(explode(',', (string)$row['extra_msg_ids']));
+                $ids[] = (int)$response->getResult()->getMessageId();
+                $update = $db->prepare('UPDATE lhc_telegram_fix SET extra_msg_ids = :ids WHERE id = :id');
+                $update->bindValue(':ids', implode(',', array_slice($ids, -20)), \PDO::PARAM_STR);
+                $update->bindValue(':id', (int)$row['id'], \PDO::PARAM_INT);
+                $update->execute();
+            }
         }
 
         return $response;
@@ -195,6 +234,17 @@ class TelegramFix
         $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
         $stmt->bindValue(':id', (int)$id, \PDO::PARAM_INT);
         $stmt->execute();
+    }
+
+    // Buttons off on the proposal and on every copy of it in the digest topic, except $exceptMsgId
+    private static function clearAllButtons($bot, $row, $exceptMsgId = 0)
+    {
+        $ids = array_merge(array((int)$row['status_msg_id']), array_map('intval', array_filter(explode(',', (string)($row['extra_msg_ids'] ?? '')))));
+        foreach (array_unique($ids) as $msgId) {
+            if ($msgId !== (int)$exceptMsgId) {
+                self::clearButtons($bot, $row['group_chat_id'], $msgId);
+            }
+        }
     }
 
     private static function clearButtons($bot, $groupChatId, $msgId)
@@ -241,13 +291,13 @@ class TelegramFix
         self::setStatus($fixId, $action === self::CALLBACK_APPLY ? 'approved' : 'rejected');
         $db->commit();
 
-        // Decided from the list in the digest: the proposal itself must not keep its buttons
-        $stmt = $db->prepare('SELECT status_msg_id FROM lhc_telegram_fix WHERE id = :id');
+        // The other copies of the proposal must not keep their buttons (the service reports the result in all of them)
+        $stmt = $db->prepare('SELECT * FROM lhc_telegram_fix WHERE id = :id');
         $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
         $stmt->execute();
-        $statusMsgId = (int)$stmt->fetchColumn();
-        if ($statusMsgId > 0 && $statusMsgId !== (int)$callbackQuery->getMessage()->getMessageId() && $action === self::CALLBACK_REJECT) {
-            self::clearButtons($bot, $callbackQuery->getMessage()->getChat()->getId(), $statusMsgId);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        if (is_array($row)) {
+            self::clearAllButtons($bot, $row, (int)$callbackQuery->getMessage()->getMessageId());
         }
 
         $message = $callbackQuery->getMessage();

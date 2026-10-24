@@ -649,6 +649,10 @@ class TelegramLiveHelperChatOperator {
             return self::sendTelegramMessageWithSplit($data);
         }
 
+        if ($method === 'sendMessage') {
+            $data = self::applyLinkPreviewOption($data);
+        }
+
         $sendData = \Longman\TelegramBot\Request::send($method, $data);
         self::$lastTelegramSendResponses = array($sendData);
         return $sendData;
@@ -656,6 +660,9 @@ class TelegramLiveHelperChatOperator {
 
     public static function sendTelegramMessageWithSplit(array &$data, $msg = null, $tchat = null, $topicContext = array())
     {
+        // Bot replies come here directly, not through sendTelegramRequest()
+        $data = self::applyLinkPreviewOption($data);
+
         $responses = array();
         $lastResponse = null;
 

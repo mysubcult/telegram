@@ -15,6 +15,9 @@ return array(
         'delay' => 4, // auto mode: seconds to wait for operator's own reply
         'captions' => false // describe every visitor file once (caption_ocr), see providers/TelegramFileCaption.php
     ),
+    // Command menu of the operators group, see modules/lhcron/sync_commands.php
+    'topic_commands' => array(), // LHC commands in the menu, in order; empty = all with a description
+    'topic_commands_bot_ids' => array(), // empty = all operator bots
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'
     )

@@ -55,9 +55,27 @@ class GenericCommand extends SystemCommand
         $user_id = $message->getFrom()->getId();
         $command = $message->getCommand();
 
+        // In an operator topic "/sbp" works as the LHC command "!sbp" and "/hint" as the reply suggestion "!?",
+        // so the commands can be picked from the Telegram command menu
+        if ((int)$message->getMessageThreadId() > 0 && ($bangText = self::topicCommandToBang((string)$command, (string)$message->getText())) !== null) {
+            $raw = $this->getUpdate()->getRawData();
+            $raw['message']['text'] = $bangText;
+            unset($raw['message']['entities']);
+
+            $genericMessage = $this->telegram->getCommandObject('genericmessage');
+            if ($genericMessage !== null) {
+                return $genericMessage->setUpdate(new \Longman\TelegramBot\Entities\Update($raw, $this->telegram->getBotUsername()))->preExecute();
+            }
+        }
+
         //If the user is an admin and the command is in the format "/whoisXYZ", call the /whois command
         if (stripos($command, 'whois') === 0 && $this->telegram->isAdmin($user_id)) {
             return $this->telegram->executeCommand('whois');
+        }
+
+        // Operators group: an unknown or misplaced command (e.g. in General) is ignored, not answered
+        if (!$message->getChat()->isPrivateChat()) {
+            return Request::emptyResponse();
         }
 
         $data = [
@@ -66,5 +84,26 @@ class GenericCommand extends SystemCommand
         ];
 
         return Request::sendMessage($data);
+    }
+
+    // "/sbp extra" → "!sbp extra" for LHC commands, "/hint" → "!?"; null when it is not a topic command
+    public static function topicCommandToBang($command, $text)
+    {
+        $command = strtolower(trim($command));
+        if ($command === '') {
+            return null;
+        }
+
+        $args = trim((string)preg_replace('/^\/\S+/u', '', trim($text)));
+
+        if ($command === 'hint') {
+            return \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::COMMAND;
+        }
+
+        if (\erLhcoreClassModelGenericBotCommand::getCount(array('filter' => array('command' => $command))) > 0) {
+            return '!' . $command . ($args !== '' ? ' ' . $args : '');
+        }
+
+        return null;
     }
 }

@@ -27,6 +27,7 @@ class TelegramSuggestTest
         self::testShiftHistory();
         self::testExtractSystemText();
         self::testIsSuggestCommand();
+        self::testPointedFileNote();
 
         echo "All TelegramSuggestTest passed successfully! [OK]\n";
     }
@@ -123,6 +124,26 @@ class TelegramSuggestTest
             self::assert(TelegramSuggest::isSuggestCommand($text) === false, 'Not a command: ' . json_encode($text));
         }
         echo "  [PASS] isSuggestCommand\n";
+    }
+
+    private static function testPointedFileNote()
+    {
+        $map = array();
+        $files = array();
+        foreach (array(101 => 11, 102 => 12, 103 => 13) as $topicMsgId => $fileId) {
+            $map[$topicMsgId] = array('kind' => 'file', 'file_id' => $fileId);
+            $file = new \stdClass();
+            $file->id = $fileId;
+            $files[] = $file;
+        }
+        $msg = new \stdClass();
+        $msg->meta_msg = json_encode(array('tg_topic_msg_contexts' => array('bot_1_chat_n_1' => array('ids' => array(101, 102, 103), 'map' => $map))));
+
+        self::assert(strpos(TelegramSuggest::pointedFileNote($msg, $files, 102), 'вложение №2 из 3') !== false, 'Replied album item is named');
+        self::assert(TelegramSuggest::pointedFileNote($msg, $files, 0) === '', 'No reply — no note');
+        self::assert(TelegramSuggest::pointedFileNote($msg, array($files[0]), 101) === '', 'Single file — no note');
+        self::assert(TelegramSuggest::pointedFileNote($msg, $files, 999) === '', 'Unknown topic message — no note');
+        echo "  [PASS] pointedFileNote\n";
     }
 }
 

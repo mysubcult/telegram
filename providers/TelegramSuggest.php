@@ -259,7 +259,11 @@ class TelegramSuggest
             return 'В чате нет сообщений клиента.';
         }
 
-        if (!self::enqueue($chat->id, $target->id, true)) {
+        // One LHC message can be several topic messages (an album): keep the one the operator replied to
+        $replied = $replyTopicMsgId > 0 ? self::findMessageByTopicId($chat->id, $replyTopicMsgId, $topicNamespace) : null;
+        $targetTopicMsgId = $replied instanceof \erLhcoreClassModelmsg && (int)$replied->id === (int)$target->id ? $replyTopicMsgId : 0;
+
+        if (!self::enqueue($chat->id, $target->id, true, $targetTopicMsgId)) {
             return 'Фоновые задачи недоступны.';
         }
 
@@ -269,14 +273,15 @@ class TelegramSuggest
         return '';
     }
 
-    public static function enqueue($chatId, $msgId, $manual)
+    // $topicMsgId: topic message of $msgId the operator pointed at (0 = the message as a whole)
+    public static function enqueue($chatId, $msgId, $manual, $topicMsgId = 0)
     {
         $resque = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhcphpresque');
         if (!is_object($resque)) {
             return false;
         }
 
-        $resque->enqueue(self::QUEUE, '\\' . self::class, array('chat_id' => (int)$chatId, 'msg_id' => (int)$msgId, 'manual' => $manual ? 1 : 0));
+        $resque->enqueue(self::QUEUE, '\\' . self::class, array('chat_id' => (int)$chatId, 'msg_id' => (int)$msgId, 'manual' => $manual ? 1 : 0, 'topic_msg_id' => (int)$topicMsgId));
         return true;
     }
 
@@ -368,6 +373,36 @@ class TelegramSuggest
         return $parts;
     }
 
+    // Album: the operator replied to one of its files — tell the model which one the suggestion is about
+    public static function pointedFileNote($msg, array $files, $topicMsgId)
+    {
+        if ($topicMsgId <= 0 || count($files) < 2) {
+            return '';
+        }
+
+        $meta = json_decode((string)$msg->meta_msg, true);
+        $maps = array((array)($meta['tg_topic_msg_map'] ?? array()));
+        foreach ((array)($meta['tg_topic_msg_contexts'] ?? array()) as $context) {
+            $maps[] = (array)($context['map'] ?? array());
+        }
+
+        $fileId = 0;
+        foreach ($maps as $map) {
+            if (isset($map[$topicMsgId]['file_id'])) {
+                $fileId = (int)$map[$topicMsgId]['file_id'];
+                break;
+            }
+        }
+
+        foreach ($files as $index => $file) {
+            if ((int)$file->id === $fileId) {
+                return 'Оператор указал на вложение №' . ($index + 1) . ' из ' . count($files) . ': подсказка — прежде всего о нём, остальные вложения — контекст.';
+            }
+        }
+
+        return '';
+    }
+
     // Descriptions (caption_ocr) of the visitor's earlier files in the chat — the history itself shows them only as [file=…]
     public static function buildEarlierFilesText($chat, $msg, array $attachedFiles, $limit = 40)
     {
@@ -413,7 +448,7 @@ class TelegramSuggest
         curl_setopt($params['ch'], CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
-    public static function requestSuggestion($chat, $msg, $restApiId)
+    public static function requestSuggestion($chat, $msg, $restApiId, $topicMsgId = 0)
     {
         $restAPI = \erLhcoreClassModelGenericBotRestAPI::fetch($restApiId);
         if (!($restAPI instanceof \erLhcoreClassModelGenericBotRestAPI) || empty($restAPI->configuration_array['parameters'][0])) {
@@ -437,6 +472,10 @@ class TelegramSuggest
         }
         $files = self::collectFiles($chat, $msg);
         self::$pendingFiles = self::buildFileParts($files);
+        $pointed = self::pointedFileNote($msg, $files, $topicMsgId);
+        if ($pointed !== '') {
+            self::$pendingFiles[] = array('text' => $pointed);
+        }
         $earlierFiles = self::buildEarlierFilesText($chat, $msg, $files);
         if ($earlierFiles !== '') {
             array_unshift(self::$pendingFiles, array('text' => $earlierFiles));
@@ -488,6 +527,7 @@ class TelegramSuggest
 
         $chatId = (int)$this->args['chat_id'];
         $msgId = (int)$this->args['msg_id'];
+        $topicMsgId = (int)($this->args['topic_msg_id'] ?? 0);
 
         $chat = \erLhcoreClassModelChat::fetch($chatId);
         $msg = \erLhcoreClassModelmsg::fetch($msgId);
@@ -498,7 +538,7 @@ class TelegramSuggest
 
         if ((int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
             if ($manual === true) {
-                self::postSuggestion($chat, $msg, '', self::CHAT_CLOSED);
+                self::postSuggestion($chat, $msg, '', self::CHAT_CLOSED, $topicMsgId);
             }
             return;
         }
@@ -508,7 +548,7 @@ class TelegramSuggest
             return;
         }
 
-        $result = self::requestSuggestion($chat, $msg, $settings['rest_api_id']);
+        $result = self::requestSuggestion($chat, $msg, $settings['rest_api_id'], $topicMsgId);
 
         if ($manual === false && ($result['text'] === '' || self::hasNewerMessages($chatId, $msgId))) {
             return;
@@ -516,11 +556,11 @@ class TelegramSuggest
 
         // Operator asked explicitly, so an empty answer or a failure is reported too
         $note = $result['error'] === true ? self::REQUEST_FAILED : self::buildNoSuggestion($result['reason']);
-        self::postSuggestion($chat, $msg, $result['text'], $note);
+        self::postSuggestion($chat, $msg, $result['text'], $note, $topicMsgId);
     }
 
     // $suggestion with Send/Dismiss buttons, or $note (no suggestion) with Dismiss only
-    public static function postSuggestion($chat, $msg, $suggestion, $note = '')
+    public static function postSuggestion($chat, $msg, $suggestion, $note = '', $topicMsgId = 0)
     {
         foreach (self::getOperatorTopics($chat) as $tchat) {
 
@@ -535,7 +575,7 @@ class TelegramSuggest
                 'reply_markup' => self::buildKeyboard($chat->id, $suggestion !== ''),
             );
 
-            $replyId = TelegramLiveHelperChatOperator::getStoredTopicMessageId($msg, null, $topicContext);
+            $replyId = TelegramLiveHelperChatOperator::getStoredTopicMessageId($msg, $topicMsgId > 0 ? $topicMsgId : null, $topicContext);
             if ($replyId !== null) {
                 $data['reply_to_message_id'] = (int)$replyId;
                 $data['allow_sending_without_reply'] = true;
@@ -587,7 +627,7 @@ class TelegramSuggest
             if (self::getSettings()['enabled'] === false) {
                 return 'Подсказки выключены';
             }
-            return self::enqueue((int)$chatId, (int)$msgId, true) ? 'Готовлю ответ…' : 'Фоновые задачи недоступны';
+            return self::enqueue((int)$chatId, (int)$msgId, true, $topicMsgId) ? 'Готовлю ответ…' : 'Фоновые задачи недоступны';
         }
 
         if ($action === self::CALLBACK_DISMISS) {

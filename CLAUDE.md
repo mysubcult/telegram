@@ -55,6 +55,9 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 - REST 105's system text starts with `{suggest_prompt_from_rest_api__104}`: `injectPrompts` replaces it with the
   current system prompt of the main bot (REST 104), so suggestions follow its rules; REST 105 adds only the
   operator-mode section after it. Edit the main prompt in REST 104 only.
+- Albums: one LHC message can be several topic messages (MAX/Telegram text + photos → `tg_topic_msg_ids`, map entry
+  per photo with `file_id`). The replied topic message id travels with the job (`topic_msg_id`): the suggestion replies
+  to that photo and the model is told which attachment the operator pointed at (`pointedFileNote`).
 - The suggestion arrives as a reply to the chosen message with «✅ Отправить» (`sgs||chat`) / «✖️» (`sgx||chat`).
   Send posts the text as the operator's own message and maps it to the suggestion's topic message id.
 - Model answers `SKIP: <reason>` when there is nothing to suggest → «💡 Подсказки нет: <reason>».

@@ -3,43 +3,48 @@
 namespace LiveHelperChatExtension\lhctelegram\providers;
 
 /**
- * Command menu ("/" button) of the operators group, built from the LHC bot commands (Bot → Commands):
- * a command marked "Enabled for display" is shown as "/name — description", ordered by "Position".
- * "/name" in a topic then works as "!name" (classes/Commands/GenericCommand.php).
+ * Command menu ("/" button) of the operators group. Which LHC bot commands it shows, and in what order, is the bot
+ * option "Commands in the "/" menu of the group" (lhc_telegram_bot.topic_commands, e.g. "setup, sbp").
+ * Descriptions come from the commands themselves (Bot → Commands). "/name" in a topic works as "!name"
+ * (classes/Commands/GenericCommand.php).
  *
- * The menu follows the LHC commands by itself: on a message in the operators group the menu is compared
+ * The menu follows the bot option and the LHC commands by itself: on a message in the operators group it is compared
  * with the one sent last time and re-sent to Telegram only when it changed.
- *
- * settings/settings.ini.php: 'topic_commands_bot_ids' => array(1) — operator bots that get the menu; empty = all.
  */
 class TelegramTopicCommands
 {
-    public static function buildMenu()
+    // "Setup, /sbp ,!pay" → "setup, sbp, pay"
+    public static function normalizeList($value)
+    {
+        $names = array();
+        foreach (preg_split('/[\s,;]+/', strtolower((string)$value)) as $name) {
+            $name = ltrim($name, '/!');
+            if (preg_match('/^[a-z0-9_]{1,32}$/', $name) && !in_array($name, $names, true)) {
+                $names[] = $name;
+            }
+        }
+        return implode(', ', $names);
+    }
+
+    public static function buildMenu($bot)
     {
         $menu = array(array('command' => 'hint', 'description' => 'Подсказка ответа от ИИ (как «!?»)'));
-        $seen = array('hint' => true, 'endchat' => true);
 
-        foreach (\erLhcoreClassModelGenericBotCommand::getList(array('filter' => array('enabled_display' => 1), 'sort' => 'position ASC, id ASC', 'limit' => false)) as $command) {
-            $name = strtolower(trim((string)$command->command));
-            $description = trim((string)($command->info_msg != '' ? $command->info_msg : $command->name));
-            // Telegram: command 1-32 chars a-z, 0-9, _; description 1-256 chars
-            if (preg_match('/^[a-z0-9_]{1,32}$/', $name) && $description !== '' && !isset($seen[$name])) {
-                $menu[] = array('command' => $name, 'description' => mb_substr($description, 0, 256));
-                $seen[$name] = true;
+        foreach (explode(', ', self::normalizeList($bot->topic_commands)) as $name) {
+            if ($name === '' || $name === 'hint' || $name === 'endchat') {
+                continue;
             }
+            $command = \erLhcoreClassModelGenericBotCommand::findOne(array('filter' => array('command' => $name)));
+            if (!($command instanceof \erLhcoreClassModelGenericBotCommand)) {
+                continue;
+            }
+            $description = trim((string)($command->info_msg != '' ? $command->info_msg : $command->name));
+            $menu[] = array('command' => $name, 'description' => mb_substr($description !== '' ? $description : '!' . $name, 0, 256));
         }
 
         $menu[] = array('command' => 'endchat', 'description' => 'Закрыть чат');
 
         return $menu;
-    }
-
-    public static function isMenuBot($bot)
-    {
-        $settings = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->settings;
-        $botIds = array_map('intval', (array)($settings['topic_commands_bot_ids'] ?? array()));
-
-        return (int)$bot->bot_client === 1 && (int)$bot->group_chat_id !== 0 && (empty($botIds) || in_array((int)$bot->id, $botIds, true));
     }
 
     private static function stateFile($bot)
@@ -48,25 +53,38 @@ class TelegramTopicCommands
     }
 
     // Sends the menu when it differs from the last one sent (or always with $force). Returns '' or an error.
+    // A bot without commands in the option keeps whatever menu the group has, unless a menu was sent before.
     public static function sync($bot, $force = false)
     {
-        if (!self::isMenuBot($bot)) {
+        if ((int)$bot->bot_client !== 1 || (int)$bot->group_chat_id === 0) {
             return '';
         }
 
-        $menu = self::buildMenu();
-        $hash = md5(json_encode(array($menu, (string)$bot->group_chat_id)));
         $stateFile = self::stateFile($bot);
+        $scope = array('type' => 'chat', 'chat_id' => $bot->group_chat_id);
+
+        if (self::normalizeList($bot->topic_commands) === '') {
+            if (!is_file($stateFile)) {
+                return '';
+            }
+            new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+            $response = \Longman\TelegramBot\Request::deleteMyCommands(array('scope' => $scope));
+            if (!$response->isOk()) {
+                return (string)$response->getDescription();
+            }
+            unlink($stateFile);
+            return '';
+        }
+
+        $menu = self::buildMenu($bot);
+        $hash = md5(json_encode(array($menu, (string)$bot->group_chat_id)));
 
         if ($force === false && is_file($stateFile) && trim((string)file_get_contents($stateFile)) === $hash) {
             return '';
         }
 
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
-        $response = \Longman\TelegramBot\Request::setMyCommands(array(
-            'commands' => $menu,
-            'scope' => array('type' => 'chat', 'chat_id' => $bot->group_chat_id)
-        ));
+        $response = \Longman\TelegramBot\Request::setMyCommands(array('commands' => $menu, 'scope' => $scope));
 
         if (!$response->isOk()) {
             return (string)$response->getDescription();

@@ -15,7 +15,6 @@ return array(
         'delay' => 4, // auto mode: seconds to wait for operator's own reply
         'captions' => false // describe every visitor file once (caption_ocr), see providers/TelegramFileCaption.php
     ),
-    'topic_commands_bot_ids' => array(), // operator bots that get the "/" menu, empty = all (providers/TelegramTopicCommands.php)
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'
     )

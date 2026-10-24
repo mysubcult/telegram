@@ -82,7 +82,7 @@ class erLhcoreClassTelegramValidator
             $item->disable_link_preview = 0;
         }
 
-        // LHC commands shown in the "/" menu of the group, in this order: "setup, sbp" (see providers/TelegramTopicCommands.php)
+        // LHC bot commands shown in the "/" menu of the group, comma separated, in this order (see providers/TelegramTopicCommands.php)
         $item->topic_commands = $form->hasValidData('topic_commands') ? \LiveHelperChatExtension\lhctelegram\providers\TelegramTopicCommands::normalizeList($form->topic_commands) : '';
 
         if ($form->hasValidData('bot_client') && $form->bot_client == true) {

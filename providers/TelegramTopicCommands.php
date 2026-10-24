@@ -4,7 +4,7 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
 
 /**
  * Command menu ("/" button) of the operators group. Which LHC bot commands it shows, and in what order, is the bot
- * option "Commands in the "/" menu of the group" (lhc_telegram_bot.topic_commands, e.g. "setup, sbp").
+ * option "Commands in the "/" menu of the group" (lhc_telegram_bot.topic_commands, comma separated).
  * Descriptions come from the commands themselves (Bot → Commands). "/name" in a topic works as "!name"
  * (classes/Commands/GenericCommand.php).
  *
@@ -13,7 +13,7 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  */
 class TelegramTopicCommands
 {
-    // "Setup, /sbp ,!pay" → "setup, sbp, pay"
+    // "Command1, /command2 ,!command3" → "command1, command2, command3"
     public static function normalizeList($value)
     {
         $names = array();

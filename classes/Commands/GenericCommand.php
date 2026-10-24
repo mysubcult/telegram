@@ -63,7 +63,7 @@ class GenericCommand extends SystemCommand
             }
         }
 
-        // In an operator topic "/sbp" works as the LHC command "!sbp" and "/hint" as the reply suggestion "!?",
+        // In an operator topic "/name" works as the LHC bot command "!name" and "/hint" as the reply suggestion "!?",
         // so the commands can be picked from the Telegram command menu
         if ((int)$message->getMessageThreadId() > 0 && ($bangText = self::topicCommandToBang((string)$command, (string)$message->getText())) !== null) {
             $raw = $this->getUpdate()->getRawData();
@@ -94,7 +94,7 @@ class GenericCommand extends SystemCommand
         return Request::sendMessage($data);
     }
 
-    // "/sbp extra" → "!sbp extra" for LHC commands, "/hint" → "!?"; null when it is not a topic command
+    // "/name args" → "!name args" for LHC bot commands, "/hint" → "!?"; null when it is not a topic command
     public static function topicCommandToBang($command, $text)
     {
         $command = strtolower(trim($command));

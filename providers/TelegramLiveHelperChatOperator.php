@@ -585,9 +585,13 @@ class TelegramLiveHelperChatOperator {
             return $data;
         }
 
-        // Not cached: resque workers live long and the option can be switched any time
-        if (\erLhcoreClassModelTelegramBot::getCount(array('filter' => array('group_chat_id' => (string)$data['chat_id'], 'disable_link_preview' => 1))) > 0) {
-            $data['link_preview_options'] = array('is_disabled' => true);
+        // Not cached: resque workers live long and the option can be switched any time.
+        // Without a database (isolated tests) the message goes as it is.
+        try {
+            if (\erLhcoreClassModelTelegramBot::getCount(array('filter' => array('group_chat_id' => (string)$data['chat_id'], 'disable_link_preview' => 1))) > 0) {
+                $data['link_preview_options'] = array('is_disabled' => true);
+            }
+        } catch (\Throwable $e) {
         }
 
         return $data;

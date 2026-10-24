@@ -10,7 +10,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * holds the AI key and the git access) picks it up, prepares an edit of the bot prompt or of a knowledge base article
  * and edits the "preparing…" message into the proposal with ✅ / ✖️. The buttons only change the status here;
  * the service applies an approved edit and reports the result in the same message.
- * "/fix ..." as a reply to a proposal asks for a revised proposal.
+ * "/fix ..." or plain text as a reply to a proposal asks for a revised proposal (the text never goes to the visitor);
+ * the "✏️ Дополнить" button under a proposal only explains this.
  * "/fix" without text in the digest topic, or the button under the digest, lists the proposals waiting for a decision,
  * each with ✅ / ✖️ and a link to the full proposal.
  *
@@ -21,6 +22,8 @@ class TelegramFix
     const CALLBACK_APPLY = 'fxa';
     const CALLBACK_REJECT = 'fxr';
     const CALLBACK_LIST = 'fxl';
+    const CALLBACK_EDIT = 'fxe';
+    const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
 
     public static function getSession()
@@ -42,6 +45,16 @@ class TelegramFix
     {
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
         return \Longman\TelegramBot\Request::sendMessage($data + array('disable_web_page_preview' => true));
+    }
+
+    // A reply in a topic to one of the fix messages (proposal, result) — a correction of that fix, not a message to the visitor
+    public static function isReplyToFix($message, $bot)
+    {
+        $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
+        if (empty($replyData['is_explicit_reply'])) {
+            return false;
+        }
+        return self::findByStatusMessage($bot, (int)$replyData['reply_message_id']) !== null;
     }
 
     private static function findByStatusMessage($bot, $topicMsgId)
@@ -197,6 +210,10 @@ class TelegramFix
      */
     public static function handleCallback($callbackQuery, $bot, $action, $fixId)
     {
+        if ($action === self::CALLBACK_EDIT) {
+            return self::EDIT_HINT;
+        }
+
         if ($action === self::CALLBACK_LIST) {
             $message = $callbackQuery->getMessage();
             self::listPending($bot, $message->getChat()->getId(), (int)$message->getMessageThreadId());

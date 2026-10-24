@@ -341,6 +341,11 @@ class GenericmessageCommand extends SystemCommand
                 return Request::emptyResponse();
             }
 
+            // Text as a reply to a /fix proposal adds to that fix and is never sent to the visitor
+            if ($text !== '' && strpos($text, '/') !== 0 && \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::isReplyToFix($message, $tBot)) {
+                return \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::handleRequest($message, $tBot, $text);
+            }
+
             $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('tuser_id' => $message->getFrom()->getId(), 'confirmed' => 1, 'bot_id' => $tBot->id)));
 
             if ($operator instanceof \erLhcoreClassModelTelegramOperator) {

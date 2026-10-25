@@ -1264,6 +1264,26 @@ class TelegramLiveHelperChatOperator {
         return self::getStoredTopicMessageId($msg, null, $topicContext);
     }
 
+    /**
+     * The visitor pressed the same messenger button twice (double tap, or the update was delivered again):
+     * same incoming message id and text as the previous visitor message. The bot ignores the repeat,
+     * so the operator topic does not need it either.
+     */
+    public static function isRepeatedButtonPress($msg)
+    {
+        $incomingId = $msg->meta_msg_array['iwh_msg_id'] ?? '';
+        if ((int)$msg->user_id !== 0 || $incomingId === '') {
+            return false;
+        }
+
+        $previous = \erLhcoreClassModelmsg::findOne(['filter' => ['chat_id' => $msg->chat_id, 'user_id' => 0], 'filterlt' => ['id' => $msg->id], 'sort' => 'id DESC']);
+
+        return $previous instanceof \erLhcoreClassModelmsg
+            && $previous->msg === $msg->msg
+            && ($previous->meta_msg_array['iwh_msg_id'] ?? '') === $incomingId
+            && abs((int)$msg->time - (int)$previous->time) <= 120;
+    }
+
     public static function messageAdded($params)
     {
         $chat = $params['chat'];
@@ -1311,7 +1331,7 @@ class TelegramLiveHelperChatOperator {
                         $db->commit();
 
                         // remove following if you want enable autoresponder messages for operators chat
-                        if (!isset($params['msg']->meta_msg_array['content']['auto_responder'])) {
+                        if (!isset($params['msg']->meta_msg_array['content']['auto_responder']) && !self::isRepeatedButtonPress($params['msg'])) {
 
                             $telegramFiles = self::getTelegramMessageFiles($params['msg']);
                             $messageText = self::stripTelegramFileEmbeds($params['msg']->msg);

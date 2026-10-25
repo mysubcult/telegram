@@ -32,7 +32,8 @@ class TelegramFix
     const CALLBACK_EDIT = 'fxe';
     const CALLBACK_SUGGESTED_TAKE = 'fxs';
     const CALLBACK_SUGGESTED_DISMISS = 'fxn';
-    const CALLBACK_ENGINE = 'dge';
+    const CALLBACK_ENGINE = 'dge';      // under the digest question: the review and /fix
+    const CALLBACK_ENGINE_FIX = 'dgm';  // under the pending list: /fix only
     const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
@@ -225,6 +226,15 @@ class TelegramFix
         $stmt->execute();
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
+        // Which AI prepares /fix proposals, with a switch (the service runs Claude only if its subscription token is set)
+        self::send($bot, array(
+            'chat_id' => $groupChatId,
+            'message_thread_id' => $threadId,
+            'disable_notification' => true,
+            'text' => '🧠 Правки /fix делает: ' . self::ENGINES[self::currentEngine($bot)] . '. Сменить:',
+            'reply_markup' => self::engineKeyboard($bot),
+        ));
+
         if (empty($rows)) {
             return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'text' => '✅ Правок, ждущих решения, нет.'));
         }
@@ -306,8 +316,8 @@ class TelegramFix
             return self::handleSuggested($callbackQuery, $bot, $action, $fixId, $operator);
         }
 
-        if ($action === self::CALLBACK_ENGINE) {
-            return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator);
+        if ($action === self::CALLBACK_ENGINE || $action === self::CALLBACK_ENGINE_FIX) {
+            return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator, $action === self::CALLBACK_ENGINE);
         }
 
         $db = \ezcDbInstance::get();
@@ -382,14 +392,33 @@ class TelegramFix
     }
 
     // The AI for the digest review and for /fix: the service reads the file (it runs as root and holds the keys)
-    private static function chooseEngine($callbackQuery, $bot, $engine, $operator)
+    public static function currentEngine($bot)
+    {
+        $data = json_decode((string)@file_get_contents('cache/telegram_ai_engine_' . (int)$bot->id . '.json'), true);
+        return isset($data['engine'], self::ENGINES[$data['engine']]) ? $data['engine'] : 'deepseek';
+    }
+
+    private static function engineKeyboard($bot)
+    {
+        $current = self::currentEngine($bot);
+        $buttons = array();
+        foreach (self::ENGINES as $engine => $label) {
+            $buttons[] = array('text' => ($engine === $current ? '• ' : '') . $label, 'callback_data' => self::CALLBACK_ENGINE_FIX . '||' . $engine);
+        }
+        return new \Longman\TelegramBot\Entities\InlineKeyboard($buttons);
+    }
+
+    private static function chooseEngine($callbackQuery, $bot, $engine, $operator, $withReview)
     {
         if (!isset(self::ENGINES[$engine])) {
             return 'Неизвестный вариант';
         }
         $message = $callbackQuery->getMessage();
         $file = 'cache/telegram_ai_engine_' . (int)$bot->id . '.json';
-        $data = array('engine' => $engine, 'msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);
+        // msg_id ties a choice to the digest question (the service starts the review for it); a switch from the list keeps it
+        $old = json_decode((string)@file_get_contents($file), true);
+        $msgId = $withReview ? (int)$message->getMessageId() : (int)($old['msg_id'] ?? 0);
+        $data = array('engine' => $engine, 'msg_id' => $msgId, 'ts' => time(), 'operator' => (string)$operator->user->name_support);
         if (file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) === false) {
             return 'Не удалось сохранить выбор';
         }
@@ -398,8 +427,10 @@ class TelegramFix
         \Longman\TelegramBot\Request::editMessageText(array(
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
-            'text' => '🧠 ИИ-разбор: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), начну в течение минуты. Правки /fix теперь тоже делает ' . self::ENGINES[$engine] . '.',
-            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
+            'text' => $withReview
+                ? '🧠 ИИ-разбор: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), начну в течение минуты. Правки /fix теперь тоже делает ' . self::ENGINES[$engine] . '.'
+                : '🧠 Правки /fix делает: ' . self::ENGINES[$engine] . ' (выбрал ' . $operator->user->name_support . '). Сменить:',
+            'reply_markup' => $withReview ? new \Longman\TelegramBot\Entities\InlineKeyboard([]) : self::engineKeyboard($bot),
         ));
 
         return 'Выбрано: ' . self::ENGINES[$engine];

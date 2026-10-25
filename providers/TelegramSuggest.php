@@ -13,6 +13,7 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * mode 'auto': the job is queued by itself after each visitor message in a chat an operator already handles,
  * waits 'delay' seconds and gives up if anyone wrote meanwhile or the model answers SKIP.
  * The draft is posted into the chat topic with "Send" / "Dismiss" buttons. All buttons are handled in CallbackqueryCommand.
+ * "!?" also works in pending and bot chats: "Send" then accepts the chat for the operator who pressed it.
  *
  * settings/settings.ini.php:
  *  'suggest' => array('enabled' => true, 'mode' => 'command', 'rest_api_id' => 105, 'dep_ids' => array(4), 'delay' => 4)
@@ -246,9 +247,9 @@ class TelegramSuggest
             return 'Подсказки выключены для этого отдела.';
         }
 
-        // "Send" posts a plain operator message and does not accept pending chats
-        if ((int)$chat->status !== \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT) {
-            return 'Подсказки работают в принятом чате: сначала ответьте клиенту сами.';
+        // Pending and bot chats are fine too: "Send" accepts them like an answer typed into the topic
+        if ((int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
+            return 'Чат уже закрыт.';
         }
 
         $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
@@ -650,7 +651,7 @@ class TelegramSuggest
             return 'Пустая подсказка';
         }
 
-        $topicContext = array('bot_id' => (int)$tBot->id, 'group_chat_id' => (string)$tBot->group_chat_id);
+        $topicContext = array('bot_id' => (int)$tBot->id, 'group_chat_id' => (string)$tBot->group_chat_id, 'thread_id' => (int)$message->getMessageThreadId());
         $lockNamespace = 'suggest_' . $topicContext['bot_id'] . '_' . $topicContext['group_chat_id'];
 
         // Double tap: the second press waits for the first one and then sees the message as used
@@ -720,6 +721,10 @@ class TelegramSuggest
         $chat->unread_op_messages_informed = 0;
         $chat->last_message = $msg;
 
+        if (in_array((int)$chat->status, array(\erLhcoreClassModelChat::STATUS_PENDING_CHAT, \erLhcoreClassModelChat::STATUS_BOT_CHAT), true)) {
+            self::acceptChat($chat, $operator, $topicContext);
+        }
+
         \erLhcoreClassChatEventDispatcher::getInstance()->dispatch('chat.web_add_msg_admin', array(
             'chat' => & $chat,
             'msg' => & $msg
@@ -730,5 +735,63 @@ class TelegramSuggest
         ));
 
         return $msg;
+    }
+
+    /**
+     * The operator answered a pending or bot chat with a suggestion: take the chat the same way
+     * GenericmessageCommand does when the operator types into the topic.
+     */
+    public static function acceptChat(\erLhcoreClassModelChat $chat, $operator, $topicContext)
+    {
+        $userData = $operator->user;
+
+        if ($userData->invisible_mode != 0) {
+            return false;
+        }
+
+        $db = \ezcDbInstance::get();
+        $db->beginTransaction();
+
+        $chat->syncAndLock('status');
+
+        if (!in_array((int)$chat->status, array(\erLhcoreClassModelChat::STATUS_PENDING_CHAT, \erLhcoreClassModelChat::STATUS_BOT_CHAT), true)) {
+            $db->commit();
+            return false;
+        }
+
+        $chat->status = \erLhcoreClassModelChat::STATUS_ACTIVE_CHAT;
+        $chat->pnd_time = time() - 2;
+        $chat->wait_time = 1;
+        $chat->user_id = $operator->user_id;
+        $chat->usaccept = $userData->hide_online;
+        $chat->operation_admin = "lhinst.updateVoteStatus(" . $chat->id . ");";
+        $chat->saveThis();
+
+        $db->commit();
+
+        \erLhcoreClassGenericBotWorkflow::removePreviousEvents($chat->id);
+
+        \erLhcoreClassChatEventDispatcher::getInstance()->dispatch('chat.data_changed', array('chat' => & $chat, 'user_data' => $userData));
+        \erLhcoreClassChatEventDispatcher::getInstance()->dispatch('chat.accept', array('chat' => & $chat, 'user_data' => $userData));
+
+        \erLhcoreClassChat::updateActiveChats($chat->user_id);
+
+        if ($chat->department !== false) {
+            \erLhcoreClassChat::updateDepartmentStats($chat->department);
+        }
+
+        \erLhcoreClassChatWorkflow::chatAcceptedWorkflow(array('department' => $chat->department, 'options' => $chat->department->inform_options_array), $chat);
+
+        $data = array(
+            'chat_id' => $topicContext['group_chat_id'],
+            'parse_mode' => 'HTML',
+            'text' => "<b>[System assistant]</b> <i>" . htmlspecialchars($userData->name_official) . "</i> " . \erTranslationClassLhTranslation::getInstance()->getTranslation('module/telegram', 'was assigned as a chat operator! Type /chat for more information.'),
+        );
+        if (!empty($topicContext['thread_id'])) {
+            $data['message_thread_id'] = $topicContext['thread_id'];
+        }
+        \Longman\TelegramBot\Request::sendMessage($data);
+
+        return true;
     }
 }

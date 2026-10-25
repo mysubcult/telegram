@@ -20,6 +20,9 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
  * The daily digest posts fixes it suggests itself (status suggested): "🛠 Сделать правку" turns one into a usual request (new),
  * "✖️ Не нужно" → dismissed; a text reply to it is a request of its own with the suggestion as the parent.
+ * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude): the choice is written to
+ * cache/telegram_ai_engine_<bot>.json (with the question message id); the service starts the review and keeps using
+ * that AI for /fix until the next choice.
  */
 class TelegramFix
 {
@@ -29,6 +32,8 @@ class TelegramFix
     const CALLBACK_EDIT = 'fxe';
     const CALLBACK_SUGGESTED_TAKE = 'fxs';
     const CALLBACK_SUGGESTED_DISMISS = 'fxn';
+    const CALLBACK_ENGINE = 'dge';
+    const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
 
@@ -301,6 +306,10 @@ class TelegramFix
             return self::handleSuggested($callbackQuery, $bot, $action, $fixId, $operator);
         }
 
+        if ($action === self::CALLBACK_ENGINE) {
+            return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator);
+        }
+
         $db = \ezcDbInstance::get();
         $db->beginTransaction();
         $stmt = $db->prepare('SELECT status FROM lhc_telegram_fix WHERE id = :id AND bot_id = :bot_id FOR UPDATE');
@@ -370,5 +379,29 @@ class TelegramFix
         ));
 
         return $take ? 'Готовлю правку' : 'Убрано';
+    }
+
+    // The AI for the digest review and for /fix: the service reads the file (it runs as root and holds the keys)
+    private static function chooseEngine($callbackQuery, $bot, $engine, $operator)
+    {
+        if (!isset(self::ENGINES[$engine])) {
+            return 'Неизвестный вариант';
+        }
+        $message = $callbackQuery->getMessage();
+        $file = 'cache/telegram_ai_engine_' . (int)$bot->id . '.json';
+        $data = array('engine' => $engine, 'msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);
+        if (file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) === false) {
+            return 'Не удалось сохранить выбор';
+        }
+
+        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+        \Longman\TelegramBot\Request::editMessageText(array(
+            'chat_id' => $message->getChat()->getId(),
+            'message_id' => $message->getMessageId(),
+            'text' => '🧠 ИИ-разбор: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), начну в течение минуты. Правки /fix теперь тоже делает ' . self::ENGINES[$engine] . '.',
+            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
+        ));
+
+        return 'Выбрано: ' . self::ENGINES[$engine];
     }
 }

@@ -22,6 +22,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
  * The daily digest posts fixes it suggests itself (status suggested): "🛠 Сделать правку" turns one into a usual request (choose),
  * "✖️ Не нужно" → dismissed; a text reply to it is a request of its own with the suggestion as the parent.
+ * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
+ * the digest (since the previous one) within a minute.
  * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude): the choice is written to
  * cache/telegram_ai_engine_<bot>.json (with the question message id); the service starts the review.
  */
@@ -47,6 +49,29 @@ class TelegramFix
     public static function getSession()
     {
         return \erLhcoreClassExtensionLhctelegram::getSession();
+    }
+
+    // "/digest": the service (fixbot.py) sees the request within a minute and sends the digest since the previous one
+    public static function requestDigest($message, $bot)
+    {
+        $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $bot->id, 'confirmed' => 1, 'tuser_id' => $message->getFrom()->getId())));
+        if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
+            return \Longman\TelegramBot\Request::emptyResponse();
+        }
+
+        $file = 'cache/telegram_digest_request_' . (int)$bot->id . '.json';
+        $data = array('ts' => time(), 'operator' => (string)$operator->user->name_support);
+        $ok = file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) !== false;
+        $digestTopicId = self::digestTopicId($bot);
+
+        return self::send($bot, array(
+            'chat_id' => $message->getChat()->getId(),
+            'message_thread_id' => (int)$message->getMessageThreadId(),
+            'reply_to_message_id' => $message->getMessageId(),
+            'text' => $ok
+                ? '📊 Сводка с прошлой будет в течение минуты' . ($digestTopicId > 0 && (int)$message->getMessageThreadId() !== $digestTopicId ? ' — в теме «Сводка»' : '') . ', под ней — выбор ИИ для разбора.'
+                : 'Не удалось запросить сводку.',
+        ));
     }
 
     public static function digestTopicId($bot)

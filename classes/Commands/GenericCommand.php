@@ -63,6 +63,14 @@ class GenericCommand extends SystemCommand
             }
         }
 
+        // "/digest" — the digest now instead of waiting for the evening one (providers/TelegramFix.php)
+        if (strtolower((string)$command) === 'digest') {
+            $tBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
+            if (is_object($tBot) && (int)$tBot->bot_client === 1) {
+                return \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::requestDigest($message, $tBot);
+            }
+        }
+
         // In an operator topic "/name" works as the LHC bot command "!name" and "/hint" as the reply suggestion "!?",
         // so the commands can be picked from the Telegram command menu
         if ((int)$message->getMessageThreadId() > 0 && ($bangText = self::topicCommandToBang((string)$command, (string)$message->getText())) !== null) {

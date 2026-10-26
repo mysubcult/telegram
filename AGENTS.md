@@ -46,6 +46,10 @@ is served on the next request (opcache validates timestamps), there is no build 
 | `settings/settings.ini.php` | Live settings, **gitignored**. Template: `settings.ini.default.php` (CRLF line endings — keep them) |
 | `tests/` | Plain PHP scripts, no PHPUnit |
 
+A topic deleted in Telegram answers sends with "message thread not found" (rarely TOPIC_DELETED): every send path calls
+`reopenDeletedTopic()` (Operator provider), which resets `tchat_id` and re-posts the chat via `chatStarted` into a new
+topic. Keep both texts when merging upstream — checking only TOPIC_DELETED lost messages (fixed 26.10.2026).
+
 Topic message mapping lives in `lh_msg.meta_msg`: `tg_topic_msg_contexts.<namespace>.ids` (namespace
 `bot_<id>_chat_n_<group id>`) plus legacy `tg_topic_msg_id` / `tg_topic_msg_ids`. A message that already has an id
 there is not forwarded again (`isTopicMessageAlreadySent`) — that is how operator messages avoid echoing back.

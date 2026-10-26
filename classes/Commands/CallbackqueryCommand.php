@@ -99,7 +99,7 @@ class CallbackqueryCommand extends SystemCommand
             }
 
 
-        } else if ($paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_APPLY || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_REJECT || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_LIST || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_EDIT || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_SUGGESTED_TAKE || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_SUGGESTED_DISMISS || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_ENGINE || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_ENGINE_FIX) {
+        } else if (in_array($paramsCallback[0], \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACKS, true)) {
 
             $answer = \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::handleCallback($callback_query, $tBot, $paramsCallback[0], $paramsCallback[1] ?? 0);
 

@@ -62,6 +62,7 @@ class erLhcoreClassTelegramValidator
                 ezcInputFormDefinitionElement::OPTIONAL, 'unsafe_raw'
             ),
             'dep' => new ezcInputFormDefinitionElement(ezcInputFormDefinitionElement::OPTIONAL, 'int',null,FILTER_REQUIRE_ARRAY),
+            'topic_icon' => new ezcInputFormDefinitionElement(ezcInputFormDefinitionElement::OPTIONAL, 'unsafe_raw',null,FILTER_REQUIRE_ARRAY),
             'group_chat_id' => new ezcInputFormDefinitionElement(ezcInputFormDefinitionElement::OPTIONAL, 'int',null),
         );
 
@@ -115,10 +116,13 @@ class erLhcoreClassTelegramValidator
         $stmt->execute();
 
         if ($form->hasValidData('dep') && !empty($form->dep)) {
+            $topicIcons = $form->hasValidData('topic_icon') ? $form->topic_icon : array();
+            $allowedIcons = !empty($topicIcons) ? array_values(\LiveHelperChatExtension\lhctelegram\providers\TelegramTopicIcons::getIcons($item)) : array();
             foreach ($form->dep as $depId) {
                 $botDep = new erLhcoreClassModelTelegramBotDep();
                 $botDep->dep_id = $depId;
                 $botDep->bot_id = $item->id;
+                $botDep->topic_icon = \LiveHelperChatExtension\lhctelegram\providers\TelegramTopicIcons::normalizeSetting($topicIcons[$depId] ?? '', $allowedIcons);
                 $botDep->saveThis();
             }
         }

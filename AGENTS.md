@@ -38,7 +38,7 @@ is served on the next request (opcache validates timestamps), there is no build 
 | `bootstrap/bootstrap.php` | Extension class, autoload (`LiveHelperChatExtension\lhctelegram\…` → file path), reply/quote helpers |
 | `providers/TelegramLiveHelperChatOperator.php` | Operator flow: listeners (`registerListeners`), forwarding chat messages into topics, topic message id mapping, locks |
 | `providers/TelegramSuggest.php` | Reply suggestions (see below) |
-| `providers/TelegramTopicIcons.php` | Topic icon = first emoji of the department name if it is in Telegram's free topic icon set (`getForumTopicIconStickers`, cached a day in `cache/telegram_topic_icons_<bot>.json`) |
+| `providers/TelegramTopicIcons.php` | Topic icon per department: `lhc_telegram_bot_dep.topic_icon` (custom emoji id from Telegram's free set `getForumTopicIconStickers` or `color:<value>`), chosen next to each department in «Edit bot departments»; icon set cached a day in `cache/telegram_topic_icons_<bot>.json`. Department names are not touched |
 | `providers/TelegramMailTopics.php` | E-mails in topics (bot option `mail_topics`): new mail conversation → topic (`lhc_telegram_chat.type = 2`, `chat_id` = conversation id), next e-mails posted into it, operator text in the topic → reply e-mail via `erLhcoreClassMailconvValidator::sendReply` |
 | `classes/Commands/GenericmessageCommand.php` | Text/media written by an operator in a topic → LHC message; `!` commands; `!?` interception |
 | `classes/Commands/CallbackqueryCommand.php` | Inline buttons in the group (take over / accept chat, online status, suggestion buttons) |

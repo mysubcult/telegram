@@ -3,19 +3,14 @@
 namespace LiveHelperChatExtension\lhctelegram\providers;
 
 /**
- * Forum topic icon from the department name.
+ * Forum topic icon per department (Telegram bots → Edit bot departments → icon next to each department).
  *
- * Bots may set a topic icon only from Telegram's free set of topic icons
- * (getForumTopicIconStickers, no Premium needed). When a department name starts with an emoji
- * from that set — e.g. "💬 Support", "📝 Mail" — new topics of that department get it as their icon,
- * so departments are told apart at a glance (mobile clients otherwise draw the first letter).
- * A coloured circle, square or heart ("🔵 Telegram", "🟣 Max") gives the default icon in that colour
- * (icon_color, one of the six colours Telegram allows). Any other first character leaves the default icon.
+ * Stored in lhc_telegram_bot_dep.topic_icon: a custom emoji id from Telegram's free set of topic icons
+ * (getForumTopicIconStickers — bots may use only these, no Premium needed) or "color:<value>" for the
+ * default icon in one of the six colours createForumTopic allows. Empty — the default icon.
+ * Mobile clients otherwise draw the first letter of the topic name, which is "[" for every chat topic.
  *
- * The emoji is then dropped from the department part of the topic name ("[Support] …", not "[💬 Support] …"),
- * so it is not shown twice.
- *
- * The set is cached per bot for a day in cache/telegram_topic_icons_<bot id>.json.
+ * The icon set is cached per bot for a day in cache/telegram_topic_icons_<bot id>.json.
  */
 class TelegramTopicIcons
 {
@@ -23,81 +18,50 @@ class TelegramTopicIcons
 
     // icon_color values allowed by createForumTopic
     const COLORS = array(
-        '🔵' => 7322096, '🟦' => 7322096, '💙' => 7322096,
-        '🟡' => 16766590, '🟨' => 16766590, '💛' => 16766590,
-        '🟣' => 13338331, '🟪' => 13338331, '💜' => 13338331,
-        '🟢' => 9367192, '🟩' => 9367192, '💚' => 9367192,
-        '🩷' => 16749490, '💗' => 16749490,
-        '🔴' => 16478047, '🟥' => 16478047,
+        7322096 => 'Blue',
+        16766590 => 'Yellow',
+        13338331 => 'Violet',
+        9367192 => 'Green',
+        16749490 => 'Pink',
+        16478047 => 'Red',
     );
 
-    // Adds icon_custom_emoji_id (or icon_color) to createForumTopic data from the department name
+    // Adds icon_custom_emoji_id or icon_color to createForumTopic data from the department setting
     public static function addIcon($bot, $department, array $data)
     {
-        $iconId = self::getIconId($bot, (string)$department);
-        if ($iconId !== '') {
-            $data['icon_custom_emoji_id'] = $iconId;
-            return self::stripName($bot, $department, $data);
-        }
-
-        $emoji = self::normalize(self::getFirstEmoji((string)$department));
-        if (isset(self::COLORS[$emoji])) {
-            $data['icon_color'] = self::COLORS[$emoji];
-        }
-
-        return self::stripName($bot, $department, $data);
-    }
-
-    // "[💬 Support] …" → "[Support] …" when the emoji is the topic icon or colour (also for editForumTopic)
-    public static function stripName($bot, $department, array $data)
-    {
-        $department = (string)$department;
-        if (!isset($data['name']) || !self::hasIcon($bot, $department)) {
+        $depId = is_object($department) ? (int)$department->id : (int)$department;
+        if (!is_object($bot) || $depId <= 0) {
             return $data;
         }
 
-        $emoji = self::getFirstEmoji($department);
-        $plain = trim(mb_substr(trim($department), mb_strlen($emoji)));
-        if ($plain !== '') {
-            $data['name'] = str_replace('[' . $department . ']', '[' . $plain . ']', (string)$data['name']);
+        $botDep = \erLhcoreClassModelTelegramBotDep::findOne(array('filter' => array('bot_id' => $bot->id, 'dep_id' => $depId)));
+        if (!($botDep instanceof \erLhcoreClassModelTelegramBotDep)) {
+            return $data;
+        }
+
+        $icon = (string)$botDep->topic_icon;
+        if (strpos($icon, 'color:') === 0) {
+            $color = (int)substr($icon, 6);
+            if (isset(self::COLORS[$color])) {
+                $data['icon_color'] = $color;
+            }
+        } elseif ($icon !== '' && ctype_digit($icon)) {
+            $data['icon_custom_emoji_id'] = $icon;
         }
 
         return $data;
     }
 
-    public static function hasIcon($bot, $department)
+    // Value from the form: an icon id of the set, an allowed colour or nothing
+    public static function normalizeSetting($value, array $icons)
     {
-        return self::getIconId($bot, (string)$department) !== '' || isset(self::COLORS[self::normalize(self::getFirstEmoji((string)$department))]);
-    }
+        $value = trim((string)$value);
 
-    public static function getIconId($bot, $departmentName)
-    {
-        $emoji = self::getFirstEmoji($departmentName);
-        if ($emoji === '') {
-            return '';
+        if (strpos($value, 'color:') === 0) {
+            return isset(self::COLORS[(int)substr($value, 6)]) ? 'color:' . (int)substr($value, 6) : '';
         }
 
-        $icons = self::getIcons($bot);
-        return isset($icons[self::normalize($emoji)]) ? (string)$icons[self::normalize($emoji)] : '';
-    }
-
-    // First word of the name when it is not a word (no letters or digits)
-    public static function getFirstEmoji($text)
-    {
-        $parts = preg_split('/\s+/u', trim((string)$text));
-        $first = is_array($parts) && isset($parts[0]) ? $parts[0] : '';
-
-        if ($first === '' || preg_match('/[\p{L}\p{N}\[\]\(\)]/u', $first)) {
-            return '';
-        }
-
-        return $first;
-    }
-
-    // "⚡️" and "⚡" are the same icon
-    public static function normalize($emoji)
-    {
-        return str_replace("\u{FE0F}", '', (string)$emoji);
+        return ($value !== '' && in_array($value, $icons, true)) ? $value : '';
     }
 
     // emoji => custom_emoji_id
@@ -115,6 +79,7 @@ class TelegramTopicIcons
         $icons = array();
 
         try {
+            new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
             // The library refuses empty data; Telegram ignores the extra field
             $response = \Longman\TelegramBot\Request::send('getForumTopicIconStickers', array('chat_id' => $bot->group_chat_id));
             if ($response->isOk() && is_array($response->getResult())) {
@@ -122,7 +87,7 @@ class TelegramTopicIcons
                     $emoji = is_object($sticker) ? (string)$sticker->getEmoji() : (string)($sticker['emoji'] ?? '');
                     $id = is_object($sticker) ? (string)$sticker->getCustomEmojiId() : (string)($sticker['custom_emoji_id'] ?? '');
                     if ($emoji !== '' && $id !== '') {
-                        $icons[self::normalize($emoji)] = $id;
+                        $icons[$emoji] = $id;
                     }
                 }
             }

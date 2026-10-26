@@ -63,6 +63,12 @@ class GenericCommand extends SystemCommand
             }
         }
 
+        // Keep the "/" menu of the group in line with the LHC commands also when operators only use commands
+        $menuBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
+        if (is_object($menuBot) && (int)$menuBot->bot_client === 1) {
+            \LiveHelperChatExtension\lhctelegram\providers\TelegramTopicCommands::sync($menuBot);
+        }
+
         // "/digest" — the digest now instead of waiting for the evening one (providers/TelegramFix.php)
         if (strtolower((string)$command) === 'digest') {
             $tBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();

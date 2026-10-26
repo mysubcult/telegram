@@ -26,6 +26,10 @@ is served on the next request (opcache validates timestamps), there is no build 
   transport, not through this extension's operator flow. Delivery of operator messages to visitors is done by LHC
   webhooks on `chat.web_add_msg_admin` (204 → Telegram bot 110 trigger 1609, 207 → Max bot 109 trigger 1607).
 - `ozreply_bot` (id 3) serves department 6 — not SmartDiag support.
+- E-mail: bot 1 has `mail_topics = 1` and the mail departments 9–11 (sales/support/service). Mail sync runs in resque
+  (`lhc_mailconv` queue, 4 workers) — restart `lhc-resque` after changing `TelegramMailTopics.php`. Auto-reply to direct
+  e-mails is core LHC, not this fork: webhook 222 `mail.conversation_started` → bot 123 trigger 2169 (action «mail»), skipped
+  for our own domain (form letters come from `site@`, the site confirms them itself) and noreply senders.
 
 ## Code map
 
@@ -34,6 +38,7 @@ is served on the next request (opcache validates timestamps), there is no build 
 | `bootstrap/bootstrap.php` | Extension class, autoload (`LiveHelperChatExtension\lhctelegram\…` → file path), reply/quote helpers |
 | `providers/TelegramLiveHelperChatOperator.php` | Operator flow: listeners (`registerListeners`), forwarding chat messages into topics, topic message id mapping, locks |
 | `providers/TelegramSuggest.php` | Reply suggestions (see below) |
+| `providers/TelegramMailTopics.php` | E-mails in topics (bot option `mail_topics`): new mail conversation → topic (`lhc_telegram_chat.type = 2`, `chat_id` = conversation id), next e-mails posted into it, operator text in the topic → reply e-mail via `erLhcoreClassMailconvValidator::sendReply` |
 | `classes/Commands/GenericmessageCommand.php` | Text/media written by an operator in a topic → LHC message; `!` commands; `!?` interception |
 | `classes/Commands/CallbackqueryCommand.php` | Inline buttons in the group (take over / accept chat, online status, suggestion buttons) |
 | `modules/lhtelegram/` | Admin UI and the webhook endpoint (`callback.php`) |

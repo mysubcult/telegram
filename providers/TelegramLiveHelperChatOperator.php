@@ -26,6 +26,9 @@ class TelegramLiveHelperChatOperator {
 
         // Text descriptions of visitor files for the suggestions
         $dispatcher->listen('file.uploadfile.file_store', TelegramFileCaption::class . '::fileStored');
+
+        // E-mails in forum topics (bot option mail_topics)
+        TelegramMailTopics::registerListeners($dispatcher);
     }
 
     public static function messageAddedAdmin($params)

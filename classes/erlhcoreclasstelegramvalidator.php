@@ -55,6 +55,9 @@ class erLhcoreClassTelegramValidator
             'disable_link_preview' => new ezcInputFormDefinitionElement(
                 ezcInputFormDefinitionElement::OPTIONAL, 'boolean'
             ),
+            'mail_topics' => new ezcInputFormDefinitionElement(
+                ezcInputFormDefinitionElement::OPTIONAL, 'boolean'
+            ),
             'topic_commands' => new ezcInputFormDefinitionElement(
                 ezcInputFormDefinitionElement::OPTIONAL, 'unsafe_raw'
             ),
@@ -81,6 +84,9 @@ class erLhcoreClassTelegramValidator
         } else {
             $item->disable_link_preview = 0;
         }
+
+        // E-mails of the bot departments in forum topics (providers/TelegramMailTopics.php)
+        $item->mail_topics = ($form->hasValidData('mail_topics') && $form->mail_topics == true) ? 1 : 0;
 
         // LHC bot commands shown in the "/" menu of the group, comma separated, in this order (see providers/TelegramTopicCommands.php)
         $item->topic_commands = $form->hasValidData('topic_commands') ? \LiveHelperChatExtension\lhctelegram\providers\TelegramTopicCommands::normalizeList($form->topic_commands) : '';

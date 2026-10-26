@@ -572,13 +572,13 @@ class TelegramSuggest
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
                 'text' => $suggestion !== '' ? self::buildHeader($msg->msg) . "\n\n" . $suggestion : ($note !== '' ? $note : self::buildNoSuggestion('')),
-                'disable_web_page_preview' => true,
+                'link_preview_options' => array('is_disabled' => true),
                 'reply_markup' => self::buildKeyboard($chat->id, $suggestion !== ''),
             );
 
             $replyId = TelegramLiveHelperChatOperator::getStoredTopicMessageId($msg, $topicMsgId > 0 ? $topicMsgId : null, $topicContext);
             if ($replyId !== null) {
-                $data['reply_to_message_id'] = (int)$replyId;
+                $data['reply_parameters'] = array('message_id' => (int)$replyId);
                 $data['allow_sending_without_reply'] = true;
             }
 
@@ -669,7 +669,7 @@ class TelegramSuggest
             'chat_id' => $groupChatId,
             'message_id' => $topicMsgId,
             'text' => '✅ Отправлено (' . $operator->user->name_support . '):' . "\n\n" . $text,
-            'disable_web_page_preview' => true,
+            'link_preview_options' => array('is_disabled' => true),
             'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ]);
 

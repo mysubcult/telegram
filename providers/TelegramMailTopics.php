@@ -354,7 +354,7 @@ class TelegramMailTopics
         return \Longman\TelegramBot\Request::sendMessage(array(
             'chat_id' => $message->getChat()->getId(),
             'message_thread_id' => $message->getMessageThreadId(),
-            'reply_to_message_id' => $message->getMessageId(),
+            'reply_parameters' => array('message_id' => $message->getMessageId()),
             'parse_mode' => 'HTML',
             'text' => $text
         ));

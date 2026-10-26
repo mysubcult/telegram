@@ -129,7 +129,7 @@ class TelegramFix
     private static function send($bot, $data)
     {
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
-        return \Longman\TelegramBot\Request::sendMessage($data + array('disable_web_page_preview' => true));
+        return \Longman\TelegramBot\Request::sendMessage($data + array('link_preview_options' => array('is_disabled' => true)));
     }
 
     // A reply in a topic to one of the fix messages (proposal, result) — a correction of that fix, not a message to the visitor
@@ -177,7 +177,7 @@ class TelegramFix
         }
 
         if ($comment === '') {
-            return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'reply_to_message_id' => $message->getMessageId(), 'text' => self::USAGE));
+            return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'reply_parameters' => array('message_id' => $message->getMessageId()), 'text' => self::USAGE));
         }
 
         $replyData = \erLhcoreClassExtensionLhctelegram::extractTelegramReplyData($message);
@@ -236,7 +236,7 @@ class TelegramFix
         $ack = self::send($bot, array_filter(array(
             'chat_id' => $groupChatId,
             'message_thread_id' => $threadId,
-            'reply_to_message_id' => $message->getMessageId(),
+            'reply_parameters' => array('message_id' => $message->getMessageId()),
             'text' => $engine !== '' ? '🛠 Переделываю правку с учётом комментария (' . (self::ENGINES[$engine] ?? $engine) . ')…' : self::CHOOSE_TEXT,
             'reply_markup' => $engine !== '' ? null : self::chooseKeyboard($fixId),
         )));
@@ -460,7 +460,7 @@ class TelegramFix
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
             'text' => ($action === self::CALLBACK_APPLY ? '⏳ Применяю (' : '✖️ Отклонено (') . $operator->user->name_support . ")\n\n" . $message->getText(),
-            'disable_web_page_preview' => true,
+            'link_preview_options' => array('is_disabled' => true),
             'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ));
 
@@ -498,7 +498,7 @@ class TelegramFix
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
             'text' => ($take ? self::CHOOSE_TEXT . ' (' : '✖️ Не нужно (') . $operator->user->name_support . ")\n\n" . $message->getText(),
-            'disable_web_page_preview' => true,
+            'link_preview_options' => array('is_disabled' => true),
             'reply_markup' => $take ? self::chooseKeyboard($fixId) : new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ));
 
@@ -542,7 +542,7 @@ class TelegramFix
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
             'text' => '🛠 Готовлю правку: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), обычно это ' . ($engine === 'claude' ? '2–6' : '1–3') . ' минуты…' . ($rest !== '' ? "\n\n" . $rest : ''),
-            'disable_web_page_preview' => true,
+            'link_preview_options' => array('is_disabled' => true),
             'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ));
 

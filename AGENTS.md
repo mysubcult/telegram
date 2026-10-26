@@ -37,6 +37,7 @@ is served on the next request (opcache validates timestamps), there is no build 
 |---|---|
 | `bootstrap/bootstrap.php` | Extension class, autoload (`LiveHelperChatExtension\lhctelegram\…` → file path), reply/quote helpers |
 | `providers/TelegramLiveHelperChatOperator.php` | Operator flow: listeners (`registerListeners`), topic message id mapping, locks. Every chat message goes into its topic through `forwardMessageToTopic()` (text or files, failed files as links, deleted topic re-created); chat text is raw in LHC — escape it (`escapeTelegramHtml`, `formatTopicLine`) before Telegram HTML |
+| `providers/TelegramApiClient.php` | Guzzle client for every Bot API call (installed in `bootstrap.php` `run()`): waits and repeats on `429` (retry_after ≤ 10 s, 2 retries), logs refused calls to `lh_audits` (category `telegram_api_error`, no token) |
 | `providers/TelegramSuggest.php` | Reply suggestions (see below) |
 | `providers/TelegramTopicIcons.php` | Topic icon per department: `lhc_telegram_bot_dep.topic_icon` (custom emoji id from Telegram's free set `getForumTopicIconStickers` or `color:<value>`), chosen next to each department in «Edit bot departments»; icon set cached a day in `cache/telegram_topic_icons_<bot>.json`. Department names are not touched; `topic_label` — start of topic names instead of «<Department> ·» («TG · Nick #id …», the letter a coloured icon shows); preview in the form |
 | `providers/TelegramMailTopics.php` | E-mails in topics (bot option `mail_topics`): new mail conversation → topic (`lhc_telegram_chat.type = 2`, `chat_id` = conversation id), next e-mails posted into it, operator text in the topic → reply e-mail via `erLhcoreClassMailconvValidator::sendReply` |
@@ -69,6 +70,7 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
   - `sudo -u www-data php extension/lhctelegram/tests/TelegramDeduplicationTest.php`
 - End-to-end checks: create a chat in department 4 «Test» (it has an operator topic), never experiment on real
   customers' chats. Telegram API calls from CLI need `new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username)` first.
+- Bot API fields: `reply_parameters` (not `reply_to_message_id`), `link_preview_options` (not `disable_web_page_preview`) — the old ones are deprecated since Bot API 7.0. The internal `$params['reply_to_message_id']` of the file helpers is our own key, not a Telegram field.
 - Telegram limits worth remembering: `callback_data` ≤ 64 bytes; bots cannot delete messages older than 48 h;
   in forum topics every message «replies» to the topic-created message — use `extractTelegramReplyData()['is_explicit_reply']`.
 - Commit messages: conventional prefix (`feat(scope):`, `fix(scope):`), Russian description is fine.

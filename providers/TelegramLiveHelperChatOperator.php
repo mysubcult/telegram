@@ -345,7 +345,7 @@ class TelegramLiveHelperChatOperator {
         }
 
         if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
-            $data['reply_to_message_id'] = (int)$replyTopicMsgId;
+            $data['reply_parameters'] = array('message_id' => (int)$replyTopicMsgId);
         }
 
         $sendData = self::sendTelegramRequest('sendMessage', $data);
@@ -509,7 +509,7 @@ class TelegramLiveHelperChatOperator {
 
             $replyTopicMsgId = is_array($params) ? ($params['reply_to_message_id'] ?? null) : $params;
             if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
-                $data['reply_to_message_id'] = (int)$replyTopicMsgId;
+                $data['reply_parameters'] = array('message_id' => (int)$replyTopicMsgId);
             }
 
             $sendData = self::sendTelegramRequest($method, $data, $multipartFilePath, $multipartFileField);
@@ -640,8 +640,8 @@ class TelegramLiveHelperChatOperator {
             return new \Longman\TelegramBot\Entities\ServerResponse(array('ok' => false, 'error_code' => 500, 'description' => 'Telegram request failed'));
         }
 
-        if (!$allowMessageSplit && self::hasTelegramStaleReplyResponse($sendData) && isset($data['reply_to_message_id'])) {
-            unset($data['reply_to_message_id']);
+        if (!$allowMessageSplit && self::hasTelegramStaleReplyResponse($sendData) && isset($data['reply_parameters'])) {
+            unset($data['reply_parameters']);
             try {
                 if ($multipartFilePath !== '' && $multipartFileField !== '') {
                     if (isset($data[$multipartFileField]) && is_resource($data[$multipartFileField])) {
@@ -692,8 +692,8 @@ class TelegramLiveHelperChatOperator {
         foreach (self::getTelegramMessageChunks($data) as $chunkData) {
             $response = \Longman\TelegramBot\Request::sendMessage($chunkData);
 
-            if (self::shouldRetryTelegramWithoutReply($response) && isset($chunkData['reply_to_message_id'])) {
-                unset($chunkData['reply_to_message_id']);
+            if (self::shouldRetryTelegramWithoutReply($response) && isset($chunkData['reply_parameters'])) {
+                unset($chunkData['reply_parameters']);
                 $response = \Longman\TelegramBot\Request::sendMessage($chunkData);
             }
 
@@ -743,7 +743,7 @@ class TelegramLiveHelperChatOperator {
                 $chunkData = $data;
                 $chunkData['text'] = ($index === 0 ? $prefix : '') . \erLhcoreClassExtensionLhctelegram::escapeTelegramHtmlText($chunk) . ($index === count($chunks) - 1 ? $suffix : '');
                 if ($index > 0) {
-                    unset($chunkData['reply_to_message_id']);
+                    unset($chunkData['reply_parameters']);
                 }
                 $result[] = $chunkData;
             }
@@ -760,7 +760,7 @@ class TelegramLiveHelperChatOperator {
             $chunkData = $data;
             $chunkData['text'] = $chunk;
             if ($index > 0) {
-                unset($chunkData['reply_to_message_id']);
+                unset($chunkData['reply_parameters']);
             }
             $result[] = $chunkData;
         }
@@ -1279,7 +1279,7 @@ class TelegramLiveHelperChatOperator {
             }
 
             if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
-                $data['reply_to_message_id'] = (int)$replyTopicMsgId;
+                $data['reply_parameters'] = array('message_id' => (int)$replyTopicMsgId);
             }
 
             $sendData = self::sendTelegramMessageWithSplit($data, $msg, $tchat, $topicContext);

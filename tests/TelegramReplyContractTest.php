@@ -175,7 +175,7 @@ $chunks = $splitMethod->invoke($extension, [
     'chat_id' => -100,
     'message_thread_id' => 77,
     'parse_mode' => 'HTML',
-    'reply_to_message_id' => 91,
+    'reply_parameters' => array('message_id' => 91),
     'text' => str_repeat('A&B <i>quoted</i> ', 400)
 ]);
 expectTelegramContract(count($chunks) > 1, 'long text must be split');
@@ -183,7 +183,7 @@ foreach ($chunks as $index => $chunk) {
     expectTelegramContract($lengthMethod->invoke($extension, $chunk['text']) <= 4000, 'split chunk must be within Telegram limit');
     expectTelegramContract(strpos($chunk['text'], '&apos;') === false, 'split HTML must not emit unsupported apostrophe entity');
     if ($index > 0) {
-        expectTelegramContract(!isset($chunk['reply_to_message_id']), 'only first split chunk keeps reply target');
+        expectTelegramContract(!isset($chunk['reply_parameters']), 'only first split chunk keeps reply target');
     }
 }
 
@@ -277,12 +277,12 @@ if (is_file($vendorAutoload)) {
         'chat_id' => -100,
         'message_thread_id' => 77,
         'document' => $retryHandle,
-        'reply_to_message_id' => 91
+        'reply_parameters' => array('message_id' => 91)
     ], $retryFixture, 'document');
     expectTelegramContract($retryResponse->isOk(), 'multipart stale-reply retry must succeed');
     expectTelegramContract(count($requestBodies) === 2, 'multipart stale-reply retry must make two requests');
     expectTelegramContract(strpos($requestBodies[0], 'retry-fixture-payload') !== false && strpos($requestBodies[1], 'retry-fixture-payload') !== false, 'multipart retry must include the file payload twice');
-    expectTelegramContract(strpos($requestBodies[1], 'reply_to_message_id') === false, 'multipart retry must remove stale reply target');
+    expectTelegramContract(strpos($requestBodies[1], 'reply_parameters') === false, 'multipart retry must remove stale reply target');
     if (is_resource($retryHandle)) {
         fclose($retryHandle);
     }

@@ -7,6 +7,7 @@ class TelegramLiveHelperChatOperator {
 
     private static $lastTelegramSendResponses = array();
     private static $lastTelegramSendData = null;
+    private static $linkPreviewDisabled = array();
 
     public static function registerListeners($dispatcher)
     {
@@ -593,13 +594,20 @@ class TelegramLiveHelperChatOperator {
             return $data;
         }
 
-        // Not cached: resque workers live long and the option can be switched any time.
+        // Cached for a minute only: resque workers live long and the option can be switched any time.
         // Without a database (isolated tests) the message goes as it is.
-        try {
-            if (\erLhcoreClassModelTelegramBot::getCount(array('filter' => array('group_chat_id' => (string)$data['chat_id'], 'disable_link_preview' => 1))) > 0) {
-                $data['link_preview_options'] = array('is_disabled' => true);
+        $groupChatId = (string)$data['chat_id'];
+        if (!isset(self::$linkPreviewDisabled[$groupChatId]) || self::$linkPreviewDisabled[$groupChatId]['time'] < time() - 60) {
+            try {
+                $disabled = \erLhcoreClassModelTelegramBot::getCount(array('filter' => array('group_chat_id' => $groupChatId, 'disable_link_preview' => 1))) > 0;
+            } catch (\Throwable $e) {
+                $disabled = false;
             }
-        } catch (\Throwable $e) {
+            self::$linkPreviewDisabled[$groupChatId] = array('time' => time(), 'disabled' => $disabled);
+        }
+
+        if (self::$linkPreviewDisabled[$groupChatId]['disabled']) {
+            $data['link_preview_options'] = array('is_disabled' => true);
         }
 
         return $data;
@@ -1210,10 +1218,122 @@ class TelegramLiveHelperChatOperator {
         }
     }
 
+    // Chat text is stored raw: <, > and & are escaped before links and quotes become Telegram HTML,
+    // otherwise Telegram rejects the whole message ("can't parse entities")
     public static function formatTelegramMessageText($messageText)
     {
-        $formatted = \erLhcoreClassBBCodePlain::make_clickable($messageText, array('sender' => 0));
+        $formatted = \erLhcoreClassBBCodePlain::make_clickable(self::escapeTelegramHtml($messageText), array('sender' => 0));
         return preg_replace('#\[quote(?:="?[^"\]]*"?)?\](.*?)\[/quote\]#is', '<blockquote>$1</blockquote>', $formatted);
+    }
+
+    public static function escapeTelegramHtml($text)
+    {
+        return htmlspecialchars((string)$text, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    // Who wrote a chat message, as the topic shows it: «🤖 [bot name]:» or «👤 [visitor nick]:»
+    public static function getTopicSenderPrefix($msg, $chat)
+    {
+        if ($msg->name_support != '') {
+            return '🤖 [' . self::escapeTelegramHtml($msg->name_support) . ']:';
+        }
+
+        return '👤 [' . \erLhcoreClassBBCodePlain::make_clickable(self::escapeTelegramHtml($chat->nick), array('sender' => 0)) . ']:';
+    }
+
+    // One chat message as a topic line: sender prefix and the text, bot answers in italics
+    public static function formatTopicLine($msg, $chat, $messageText)
+    {
+        $text = self::formatTelegramMessageText($messageText);
+        return trim(self::getTopicSenderPrefix($msg, $chat) . ' ' . ($msg->name_support != '' ? '<i>' . $text . '</i>' : $text));
+    }
+
+    /**
+     * Posts one chat message into the chat topic: its text, or its files with the text as the first caption.
+     * Files Telegram did not take are listed as download links; topic message ids are stored on the message.
+     * $replyTopicMsgId — topic message to reply to; null takes the reply/quote of the message itself.
+     * Returns false when the topic was deleted in Telegram and the chat was posted again into a new one:
+     * that repost already contains this message, the caller stops.
+     */
+    public static function forwardMessageToTopic($tchat, $chat, $msg, $topicContext, $replyTopicMsgId = null)
+    {
+        if ($replyTopicMsgId === null) {
+            $replyTopicMsgId = self::getTopicReplyId($msg, $chat->id, $topicContext);
+        }
+
+        $silent = $chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT;
+        $telegramFiles = self::getTelegramMessageFiles($msg);
+        $messageText = self::stripTelegramFileEmbeds($msg->msg);
+        $prefix = self::getTopicSenderPrefix($msg, $chat);
+
+        if ($messageText !== '' && empty($telegramFiles)) {
+            $data = [
+                'chat_id' => $tchat->bot->group_chat_id,
+                'message_thread_id' => $tchat->tchat_id,
+                'parse_mode' => 'HTML',
+                'text' => self::formatTopicLine($msg, $chat, $messageText)
+            ];
+
+            if ($silent) {
+                $data['disable_notification'] = true;
+            }
+
+            if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
+                $data['reply_to_message_id'] = (int)$replyTopicMsgId;
+            }
+
+            $sendData = self::sendTelegramMessageWithSplit($data, $msg, $tchat, $topicContext);
+
+            if (!$sendData->isOk()) {
+                // Topic deleted in Telegram ("message thread not found" / TOPIC_DELETED): post the chat into a new one
+                if (self::reopenDeletedTopic($tchat, $chat, $sendData)) {
+                    return false;
+                }
+                self::logTopicError('sendMessage [' . $sendData->getErrorCode() . '] ' . $sendData->getDescription(), $chat->id);
+            }
+
+            return true;
+        }
+
+        $failedEmbedCodes = array();
+        foreach ($telegramFiles as $index => $telegramFile) {
+            $caption = self::getTelegramFileCaption($msg, $chat, $telegramFile['file'], $index === 0 ? $messageText : '');
+            $sentFileMsgId = self::sendTelegramChatFile($tchat, $telegramFile, $caption, $silent, $replyTopicMsgId, $msg, $topicContext);
+            if ($sentFileMsgId === false) {
+                $failedEmbedCodes[] = $telegramFile['embed'];
+            } elseif (is_int($sentFileMsgId)) {
+                self::saveTelegramFileTopicMsgId($msg, $sentFileMsgId, $telegramFile, $caption, $topicContext);
+            }
+        }
+
+        if (!empty($failedEmbedCodes)) {
+            if (self::reopenDeletedTopic($tchat, $chat)) {
+                return false;
+            }
+
+            self::sendTelegramRequest('sendMessage', array(
+                'chat_id' => $tchat->bot->group_chat_id,
+                'message_thread_id' => $tchat->tchat_id,
+                'parse_mode' => 'HTML',
+                'text' => trim($prefix . "\n" . self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles))
+            ));
+        }
+
+        return true;
+    }
+
+    public static function logTopicError($text, $chatId)
+    {
+        \erLhcoreClassLog::write($text,
+            \ezcLog::SUCCESS_AUDIT,
+            array(
+                'source' => 'lhc',
+                'category' => 'telegram_exception',
+                'line' => __LINE__,
+                'file' => __FILE__,
+                'object_id' => $chatId
+            )
+        );
     }
 
     public static function getTopicReplyId($msg, $chatId, $topicContext = array())
@@ -1364,9 +1484,6 @@ class TelegramLiveHelperChatOperator {
                         // remove following if you want enable autoresponder messages for operators chat
                         if (!isset($params['msg']->meta_msg_array['content']['auto_responder']) && !self::isRepeatedButtonPress($params['msg'])) {
 
-                            $telegramFiles = self::getTelegramMessageFiles($params['msg']);
-                            $messageText = self::stripTelegramFileEmbeds($params['msg']->msg);
-
                             if ($tchat->tchat_id == null || $tchat->tchat_id == 0) {
                                 $topicTitle = mb_substr(TelegramTopicIcons::topicPrefix($tchat->bot, $chat->department) . ' ' . $chat->nick . ' #' . $chat->id . ($chat->ip != '' ? ' | ' . $chat->ip : '') . ($chat->country_code != '' ? ' | ' . strtoupper($chat->country_code) : '') . ($chat->referrer != '' ? ' | ' . ltrim($chat->referrer, '/') : '') . (is_object($chat->online_user) && $chat->online_user->page_title != '' ? ' | ' . $chat->online_user->page_title : ''), 0, 128);
                                 $sendTopicData = \Longman\TelegramBot\Request::send('createForumTopic', TelegramTopicIcons::addIcon($tchat->bot, $chat->department, [
@@ -1393,84 +1510,8 @@ class TelegramLiveHelperChatOperator {
                                 }
                             }
 
-                            $sendData = null;
-
-                            if ($messageText !== '' && empty($telegramFiles)) {
-                                $data = [
-                                    'chat_id' => $tchat->bot->group_chat_id,
-                                    'message_thread_id' => $tchat->tchat_id,
-                                    'parse_mode' => 'HTML',
-                                    'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']: <i>' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($messageText) . ($params['msg']->name_support != '' ? '</i>' : ''))
-                                ];
-
-                                if ($chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT) {
-                                    $data['disable_notification'] = true;
-                                }
-
-                                $replyTopicMsgId = self::getTopicReplyId($params['msg'], $chat->id, $topicContext);
-                                if ($replyTopicMsgId !== null && (int)$replyTopicMsgId > 0) {
-                                    $data['reply_to_message_id'] = (int)$replyTopicMsgId;
-                                }
-
-                                $sendData = self::sendTelegramMessageWithSplit($data, $params['msg'], $tchat, $topicContext);
-
-                                // Topic deleted in Telegram ("message thread not found" / TOPIC_DELETED): post the chat into a new one
-                                if (!$sendData->isOk() && self::reopenDeletedTopic($tchat, $chat, $sendData)) {
-                                    return;
-                                }
-
-                                if (!$sendData->isOk()) {
-                                    \erLhcoreClassLog::write('sendMessagesss ['.$sendData->getErrorCode().']'. $sendData->getDescription(),
-                                        \ezcLog::SUCCESS_AUDIT,
-                                        array(
-                                            'source' => 'lhc',
-                                            'category' => 'telegram_exception',
-                                            'line' => __LINE__,
-                                            'file' => __FILE__,
-                                            'object_id' => $chat->id
-                                        )
-                                    );
-                                }
-                            }
-
-                            if (!empty($telegramFiles) && ($sendData === null || $sendData->isOk())) {
-                                $failedEmbedCodes = array();
-                                $fileIndex = 0;
-
-                                foreach ($telegramFiles as $telegramFile) {
-                                    $fileReplyTopicMsgId = self::getTopicReplyId($params['msg'], $chat->id, $topicContext);
-                                    $fileCaption = self::getTelegramFileCaption($params['msg'], $chat, $telegramFile['file'], $fileIndex === 0 ? $messageText : '');
-                                    $fileDisableNotification = $chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT;
-                                    $sendFileResult = self::sendTelegramChatFile(
-                                        $tchat,
-                                        $telegramFile,
-                                        $fileCaption,
-                                        $fileDisableNotification,
-                                        $fileReplyTopicMsgId,
-                                        $params['msg'],
-                                        $topicContext
-                                    );
-                                    if ($sendFileResult === false) {
-                                        $failedEmbedCodes[] = $telegramFile['embed'];
-                                    } else {
-                                        self::saveTelegramFileTopicMsgId($params['msg'], $sendFileResult, $telegramFile, $fileCaption, $topicContext);
-                                    }
-                                    $fileIndex++;
-                                }
-
-                                if (!empty($failedEmbedCodes) && self::reopenDeletedTopic($tchat, $chat)) {
-                                    return;
-                                }
-
-                                if (!empty($failedEmbedCodes)) {
-                                    $failedText = self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles);
-                                    self::sendTelegramRequest('sendMessage', array(
-                                        'chat_id' => $tchat->bot->group_chat_id,
-                                        'message_thread_id' => $tchat->tchat_id,
-                                        'parse_mode' => 'HTML',
-                                        'text' => trim(($params['msg']->name_support != '' ? '🤖 [' . $params['msg']->name_support . ']:' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']:') . "\n" . $failedText)
-                                    ));
-                                }
+                            if (self::forwardMessageToTopic($tchat, $chat, $params['msg'], $topicContext) === false) {
+                                return;
                             }
                         }
                     }
@@ -1516,80 +1557,8 @@ class TelegramLiveHelperChatOperator {
                             continue;
                         }
 
-                        $botTelegramFiles = self::getTelegramMessageFiles($botMessage);
-                        $botMessageText = self::stripTelegramFileEmbeds($botMessage->msg);
-                        $botReplyTopicMsgId = self::getTopicMessageId($params['msg'], $chat->id, $topicContext);
-
-                        if ($botMessageText !== '' && empty($botTelegramFiles)) {
-                            $botData = [
-                                'chat_id' => $tchat->bot->group_chat_id,
-                                'message_thread_id' => $tchat->tchat_id,
-                                'parse_mode' => 'HTML',
-                                'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤: ') . \erLhcoreClassBBCodePlain::make_clickable($botMessageText, array('sender' => 0)) . ($botMessage->name_support != '' ? '</i>' : ''))
-                            ];
-
-                            if ($chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT) {
-                                $botData['disable_notification'] = true;
-                            }
-
-                            if ($botReplyTopicMsgId !== null && (int)$botReplyTopicMsgId > 0) {
-                                $botData['reply_to_message_id'] = (int)$botReplyTopicMsgId;
-                            }
-
-                            $botSendData = self::sendTelegramMessageWithSplit($botData, $botMessage, $tchat, $topicContext);
-
-                            if (!$botSendData->isOk() && self::reopenDeletedTopic($tchat, $chat, $botSendData)) {
-                                return;
-                            }
-
-                            if (!$botSendData->isOk()) {
-                                \erLhcoreClassLog::write('sendBotMessage [' . $botSendData->getErrorCode() . '] ' . $botSendData->getDescription(),
-                                    \ezcLog::SUCCESS_AUDIT,
-                                    array(
-                                        'source' => 'lhc',
-                                        'category' => 'telegram_exception',
-                                        'line' => __LINE__,
-                                        'file' => __FILE__,
-                                        'object_id' => $chat->id
-                                    )
-                                );
-                            }
-                        }
-
-                        if (!empty($botTelegramFiles)) {
-                            $failedBotEmbedCodes = array();
-                            $botFileIndex = 0;
-
-                            foreach ($botTelegramFiles as $botTelegramFile) {
-                                $botFileReplyTopicMsgId = self::getTopicReplyId($botMessage, $chat->id, $topicContext);
-                                $botFileCaption = self::getTelegramFileCaption($botMessage, $chat, $botTelegramFile['file'], $botFileIndex === 0 ? $botMessageText : '');
-                                $botFileDisableNotification = $chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT;
-                                $sentBotFileResult = self::sendTelegramChatFile(
-                                    $tchat,
-                                    $botTelegramFile,
-                                    $botFileCaption,
-                                    $botFileDisableNotification,
-                                    $botFileReplyTopicMsgId,
-                                    $botMessage,
-                                    $topicContext
-                                );
-                                if ($sentBotFileResult === false) {
-                                    $failedBotEmbedCodes[] = $botTelegramFile['embed'];
-                                } else {
-                                    self::saveTelegramFileTopicMsgId($botMessage, $sentBotFileResult, $botTelegramFile, $botFileCaption, $topicContext);
-                                }
-                                $botFileIndex++;
-                            }
-
-                            if (!empty($failedBotEmbedCodes)) {
-                                $failedBotText = self::formatFailedTelegramFiles($failedBotEmbedCodes, $botTelegramFiles);
-                                self::sendTelegramRequest('sendMessage', array(
-                                    'chat_id' => $tchat->bot->group_chat_id,
-                                    'message_thread_id' => $tchat->tchat_id,
-                                    'parse_mode' => 'HTML',
-                                    'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']:' : '👤 [' . \erLhcoreClassBBCodePlain::make_clickable($chat->nick, array('sender' => 0)) . ']:') . "\n" . $failedBotText)
-                                ));
-                            }
+                        if (self::forwardMessageToTopic($tchat, $chat, $botMessage, $topicContext, self::getTopicMessageId($params['msg'], $chat->id, $topicContext)) === false) {
+                            return;
                         }
                     } finally {
                         self::releaseTelegramMessageLock($botMessage->id, $namespace);
@@ -1641,71 +1610,8 @@ class TelegramLiveHelperChatOperator {
                     $tchat->updateThis(['update' => ['last_msg_id']]);
                     $db->commit();
 
-                    $telegramFiles = self::getTelegramMessageFiles($botMessage);
-                    $messageText = self::stripTelegramFileEmbeds($botMessage->msg);
-                    $botReplyTopicMsgId = self::getTopicMessageId($params['msg'], $chat->id, $topicContext);
-
-                    if ($messageText !== '' && empty($telegramFiles)) {
-                        $data = [
-                            'chat_id' => $tchat->bot->group_chat_id,
-                            'message_thread_id' => $tchat->tchat_id,
-                            'parse_mode' => 'HTML',
-                            'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤: ') . \erLhcoreClassBBCodePlain::make_clickable($messageText, array('sender' => 0)) . ($botMessage->name_support != '' ? '</i>' : ''))
-                        ];
-                        if ($chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT) {
-                            $data['disable_notification'] = true;
-                        }
-                        if ($botReplyTopicMsgId > 0) {
-                            $data['reply_to_message_id'] = $botReplyTopicMsgId;
-                        }
-                        $sendData = self::sendTelegramRequest('sendMessage', $data);
-                        self::saveTelegramTopicMessageIds($botMessage, $sendData, array('text' => $messageText, 'kind' => 'text'), $topicContext);
-
-                        if (!$sendData->isOk()) {
-                            \erLhcoreClassLog::write('['.$sendData->getErrorCode().']'. $sendData->getDescription(),
-                                \ezcLog::SUCCESS_AUDIT,
-                                array(
-                                    'source' => 'lhc',
-                                    'category' => 'telegram_exception',
-                                    'line' => __LINE__,
-                                    'file' => __FILE__,
-                                    'object_id' => $chat->id
-                                )
-                            );
-                        }
-                    }
-
-                    if (!empty($telegramFiles)) {
-                        $failedEmbedCodes = array();
-                        $fileIndex = 0;
-
-                        foreach ($telegramFiles as $telegramFile) {
-                            $sentFileMsgId = self::sendTelegramChatFile(
-                                $tchat,
-                                $telegramFile,
-                                self::getTelegramFileCaption($botMessage, $chat, $telegramFile['file'], $fileIndex === 0 ? $messageText : ''),
-                                $chat->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT,
-                                $botReplyTopicMsgId,
-                                $botMessage,
-                                $topicContext
-                            );
-                            if ($sentFileMsgId === false) {
-                                $failedEmbedCodes[] = $telegramFile['embed'];
-                            } else {
-                                self::saveTelegramFileTopicMsgId($botMessage, $sentFileMsgId, $telegramFile, self::getTelegramFileCaption($botMessage, $chat, $telegramFile['file'], $fileIndex === 0 ? $messageText : ''), $topicContext);
-                            }
-                            $fileIndex++;
-                        }
-
-                        if (!empty($failedEmbedCodes)) {
-                            $failedText = self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles);
-                            self::sendTelegramRequest('sendMessage', array(
-                                'chat_id' => $tchat->bot->group_chat_id,
-                                'message_thread_id' => $tchat->tchat_id,
-                                'parse_mode' => 'HTML',
-                                'text' => trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']:' : '👤:') . "\n" . $failedText)
-                            ));
-                        }
+                    if (self::forwardMessageToTopic($tchat, $chat, $botMessage, $topicContext, self::getTopicMessageId($params['msg'], $chat->id, $topicContext)) === false) {
+                        return;
                     }
                 } finally {
                     self::releaseTelegramMessageLock($botMessage->id, $namespace);
@@ -1814,12 +1720,6 @@ class TelegramLiveHelperChatOperator {
                 $db->commit();
 
                 try {
-                    $onlineUser = $params['chat']->online_user;
-
-                    if ($params['chat']->status == \erLhcoreClassModelChat::STATUS_BOT_CHAT && $bot->bot->exclude_bot_chats == 1) {
-                        continue;
-                    }
-
                     $telegram = new \Longman\TelegramBot\Telegram($bot->bot->bot_api, $bot->bot->bot_username);
                     $topicContext = array(
                         'bot_id' => (int)$bot->bot->id,
@@ -1860,7 +1760,7 @@ class TelegramLiveHelperChatOperator {
                             if (empty($botMessage->msg)) {
                                 continue;
                             }
-                            $previousChatMessagesList[] = trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($botMessage->msg) . ($botMessage->name_support != '' ? '</i>' : ''));
+                            $previousChatMessagesList[] = self::formatTopicLine($botMessage, $params['chat'], $botMessage->msg);
                         }
 
                         if (!empty($previousChatMessagesList)){
@@ -1891,15 +1791,17 @@ class TelegramLiveHelperChatOperator {
                     $initialTelegramFiles = array();
                     $initialAggregateMessages = array();
                     $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $params['chat']->id)));
-                    foreach ($botMessages as $botMessage) {
-                        $tChat->last_msg_id = $botMessage->id;
+                    if (!empty($botMessages)) {
+                        $tChat->last_msg_id = max(array_map(function ($botMessage) { return (int)$botMessage->id; }, $botMessages));
                         $tChat->updateThis(['update' => ['last_msg_id']]);
+                    }
 
+                    foreach ($botMessages as $botMessage) {
                         $telegramFiles = self::getTelegramMessageFiles($botMessage);
                         $messageText = self::stripTelegramFileEmbeds($botMessage->msg);
 
                         if ($messageText !== '' && empty($telegramFiles)) {
-                            $visitor[] = trim(($botMessage->name_support != '' ? '🤖 [' . $botMessage->name_support . ']: <i>' : '👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']: ') . self::formatTelegramMessageText($messageText) . ($botMessage->name_support != '' ? '</i>' : ''));
+                            $visitor[] = self::formatTopicLine($botMessage, $params['chat'], $messageText);
                             $initialAggregateMessages[] = array('msg' => $botMessage, 'text' => $messageText);
                         }
 
@@ -2015,7 +1917,7 @@ class TelegramLiveHelperChatOperator {
                                 'chat_id' => $tChat->bot->group_chat_id,
                                 'message_thread_id' => $tChat->tchat_id,
                                 'parse_mode' => 'HTML',
-                                'text' => trim('👤 ['. \erLhcoreClassBBCodePlain::make_clickable($params['chat']->nick, array('sender' => 0)) . ']:' . "\n" . $failedText)
+                                'text' => trim('👤 [' . \erLhcoreClassBBCodePlain::make_clickable(self::escapeTelegramHtml($params['chat']->nick), array('sender' => 0)) . ']:' . "\n" . $failedText)
                             ));
                         }
                     }

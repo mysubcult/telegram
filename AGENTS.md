@@ -66,7 +66,7 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 - Tests (from `lhc_web/`):
   - `sudo -u www-data php extension/lhctelegram/tests/TelegramSuggestTest.php`
   - `php extension/lhctelegram/tests/TelegramReplyContractTest.php`
-  - `TelegramDeduplicationTest.php` — its trigger 1791 check fails since that trigger was removed (known).
+  - `sudo -u www-data php extension/lhctelegram/tests/TelegramDeduplicationTest.php`
 - End-to-end checks: create a chat in department 4 «Test» (it has an operator topic), never experiment on real
   customers' chats. Telegram API calls from CLI need `new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username)` first.
 - Telegram limits worth remembering: `callback_data` ≤ 64 bytes; bots cannot delete messages older than 48 h;

@@ -347,6 +347,20 @@ expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLi
 expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramMessageText('[quote="287986"]цитата[/quote]ответ') === '<blockquote>цитата</blockquote>ответ', 'formatTelegramMessageText must format quoted numeric BBCode quote as blockquote');
 expectTelegramContract(\LiveHelperChatExtension\lhctelegram\providers\TelegramLiveHelperChatOperator::formatTelegramMessageText('[quote]цитата[/quote]ответ') === '<blockquote>цитата</blockquote>ответ', 'formatTelegramMessageText must format plain BBCode quote as blockquote');
 
+// Raw chat text is escaped for Telegram HTML before links and quotes are added
+$op = '\\LiveHelperChatExtension\\lhctelegram\\providers\\TelegramLiveHelperChatOperator';
+expectTelegramContract($op::formatTelegramMessageText('a < b & c > d') === 'a &lt; b &amp; c &gt; d', 'formatTelegramMessageText must escape <, > and &');
+expectTelegramContract($op::formatTelegramMessageText('[quote]<b>x</b>[/quote]y') === '<blockquote>&lt;b&gt;x&lt;/b&gt;</blockquote>y', 'visitor HTML inside a quote must stay text');
+$mockVisitorMsg = (object)['name_support' => '', 'msg' => 'x'];
+$mockBotMsg = (object)['name_support' => 'Bot <1>', 'msg' => 'x'];
+$mockChatNick = (object)['nick' => 'Ivan <&>'];
+expectTelegramContract($op::getTopicSenderPrefix($mockVisitorMsg, $mockChatNick) === '👤 [Ivan &lt;&amp;&gt;]:', 'visitor nick must be escaped in the topic prefix');
+expectTelegramContract($op::formatTopicLine($mockBotMsg, $mockChatNick, 'ok') === '🤖 [Bot &lt;1&gt;]: <i>ok</i>', 'bot answer line keeps the italic format');
+expectTelegramContract($op::formatTopicLine($mockVisitorMsg, $mockChatNick, 'hi') === '👤 [Ivan &lt;&amp;&gt;]: hi', 'visitor line has the nick prefix');
+$opCode = file_get_contents(__DIR__ . '/../providers/TelegramLiveHelperChatOperator.php');
+expectTelegramContract(substr_count($opCode, 'self::forwardMessageToTopic(') === 3, 'visitor, following bot and button messages go through forwardMessageToTopic');
+expectTelegramContract(strpos($opCode, 'exclude_bot_chats') === false, 'no reference to the non-existent exclude_bot_chats option');
+
 // getTopicReplyId contract tests
 $mockMsgDirect = new \erLhcoreClassModelmsg();
 $mockMsgDirect->meta_msg_array = ['content' => ['reply_to' => ['telegram_message_id' => 9988]]];

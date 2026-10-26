@@ -24,7 +24,6 @@ class TelegramDeduplicationTest
         self::testLocking();
         self::testIsTopicMessageAlreadySent();
         self::testOperatorResetOfflineNotified();
-        self::testTrigger1791Logic();
 
         echo "All TelegramDeduplicationTest passed successfully! [OK]\n";
     }
@@ -106,31 +105,6 @@ class TelegramDeduplicationTest
         }
 
         echo "  [PASS] testOperatorResetOfflineNotified\n";
-    }
-
-    private static function testTrigger1791Logic()
-    {
-        $chat = \erLhcoreClassModelChat::fetch(24889);
-        $trigger = \erLhcoreClassModelGenericBotTrigger::fetch(1791);
-        $action = json_decode($trigger->actions, true)[0];
-
-        // 1. Operator active (sent message 45 seconds ago): trigger should NOT match
-        $chat->chat_variables_array = array();
-        $chat->last_op_msg_time = time() - 45;
-        $resActive = \erLhcoreClassGenericBotActionConditions::process($chat, $action, $trigger, array('chat' => $chat));
-        if ($resActive !== null) {
-            throw new \RuntimeException("Trigger 1791 should NOT fire when operator spoke 45 seconds ago! Got: " . json_encode($resActive));
-        }
-
-        // 2. Operator inactive (sent message 40 minutes ago): trigger should match
-        $chat->chat_variables_array = array();
-        $chat->last_op_msg_time = time() - 2400;
-        $resInactive = \erLhcoreClassGenericBotActionConditions::process($chat, $action, $trigger, array('chat' => $chat));
-        if (!is_array($resInactive) || !isset($resInactive['trigger_id']) || $resInactive['trigger_id'] != 1792) {
-            throw new \RuntimeException("Trigger 1791 SHOULD fire when operator inactive for 40 min! Got: " . json_encode($resInactive));
-        }
-
-        echo "  [PASS] testTrigger1791Logic (active operator blocked, inactive operator permitted)\n";
     }
 }
 

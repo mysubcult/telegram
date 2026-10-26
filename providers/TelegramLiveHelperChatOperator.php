@@ -93,11 +93,11 @@ class TelegramLiveHelperChatOperator {
 
             $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
 
-            $sendData = \Longman\TelegramBot\Request::send('editForumTopic', [
+            $sendData = \Longman\TelegramBot\Request::send('editForumTopic', TelegramTopicIcons::stripName($tchat->bot, $chat->department, [
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
                 'name' => mb_substr('[' . $chat->department . '] ' . $chat->nick . ' #' . $chat->id . ($params['ou']->ip != '' ? ' | ' . $params['ou']->ip : '') . ($params['ou']->user_country_code != '' ? ' | ' . strtoupper($params['ou']->user_country_code) : '') . ($params['ou']->current_page != '' ? ' | '. ltrim($params['ou']->current_page,'/') : '') . ($params['ou']->page_title != '' ? ' | '.$params['ou']->page_title : ''),0,128)
-            ]);
+            ]));
 
             if (!$sendData->isOk()) {
                 \erLhcoreClassLog::write('editForumTopic ['.$sendData->getErrorCode().']'. $sendData->getDescription(),

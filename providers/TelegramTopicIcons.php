@@ -12,6 +12,9 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * A coloured circle, square or heart ("🔵 Telegram", "🟣 Max") gives the default icon in that colour
  * (icon_color, one of the six colours Telegram allows). Any other first character leaves the default icon.
  *
+ * The emoji is then dropped from the department part of the topic name ("[Support] …", not "[💬 Support] …"),
+ * so it is not shown twice.
+ *
  * The set is cached per bot for a day in cache/telegram_topic_icons_<bot id>.json.
  */
 class TelegramTopicIcons
@@ -34,7 +37,7 @@ class TelegramTopicIcons
         $iconId = self::getIconId($bot, (string)$department);
         if ($iconId !== '') {
             $data['icon_custom_emoji_id'] = $iconId;
-            return $data;
+            return self::stripName($bot, $department, $data);
         }
 
         $emoji = self::normalize(self::getFirstEmoji((string)$department));
@@ -42,7 +45,29 @@ class TelegramTopicIcons
             $data['icon_color'] = self::COLORS[$emoji];
         }
 
+        return self::stripName($bot, $department, $data);
+    }
+
+    // "[💬 Support] …" → "[Support] …" when the emoji is the topic icon or colour (also for editForumTopic)
+    public static function stripName($bot, $department, array $data)
+    {
+        $department = (string)$department;
+        if (!isset($data['name']) || !self::hasIcon($bot, $department)) {
+            return $data;
+        }
+
+        $emoji = self::getFirstEmoji($department);
+        $plain = trim(mb_substr(trim($department), mb_strlen($emoji)));
+        if ($plain !== '') {
+            $data['name'] = str_replace('[' . $department . ']', '[' . $plain . ']', (string)$data['name']);
+        }
+
         return $data;
+    }
+
+    public static function hasIcon($bot, $department)
+    {
+        return self::getIconId($bot, (string)$department) !== '' || isset(self::COLORS[self::normalize(self::getFirstEmoji((string)$department))]);
     }
 
     public static function getIconId($bot, $departmentName)

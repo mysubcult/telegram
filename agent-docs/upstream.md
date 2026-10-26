@@ -13,7 +13,7 @@
 
 - Merged upstream 26.10.2026: #97 link previews, #98 compact new chat card, #100 auto responder notes, #101 webhook secret,
   #104 escaping chat text; `mod-production` has merged `origin/master` after that (the code was already here).
-- Open PRs (26.10.2026, all mergeable): #99 "/" command menu, #102 mail topics, #103 topic icons. #103 merges cleanly
+- Open PRs (26.10.2026, all mergeable): #99 "/" command menu, #102 mail topics, #103 topic icons, #105 Bot API client (429 retry + audit log of refused calls), #106 `/whoami` reply_parameters. #103 merges cleanly
   with either; #99 and #102 both add a column to the one-line `CREATE TABLE lhc_telegram_bot` — whichever goes second
   needs `origin/master` merged into its branch (promised to the author in a #102 comment).
   All of them are already in `mod-production`. Check they still merge together before opening a new one:

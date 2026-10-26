@@ -852,6 +852,34 @@ class TelegramLiveHelperChatOperator {
         return false;
     }
 
+    /**
+     * The topic of the chat was deleted in Telegram (an operator removed it): forget it and post the chat again
+     * into a new topic (chatStarted creates it and sends the chat card with all messages, the new one included).
+     * Without $sendData the responses of the last request (e.g. a file) are checked.
+     */
+    public static function reopenDeletedTopic($tchat, $chat, $sendData = null)
+    {
+        $isDeleted = $sendData !== null && self::isTelegramTopicUnavailable($sendData);
+        if (!$isDeleted && $sendData === null) {
+            foreach (self::$lastTelegramSendResponses as $response) {
+                if (self::isTelegramTopicUnavailable($response)) {
+                    $isDeleted = true;
+                    break;
+                }
+            }
+        }
+
+        if (!$isDeleted || !($chat instanceof \erLhcoreClassModelChat)) {
+            return false;
+        }
+
+        $tchat->tchat_id = 0;
+        $tchat->updateThis(['update' => ['tchat_id']]);
+
+        self::chatStarted(['chat' => $chat]);
+        return true;
+    }
+
     public static function isTelegramTopicUnavailable($sendData)
     {
         if (!is_object($sendData) || $sendData->isOk() || (int)$sendData->getErrorCode() !== 400) {
@@ -1386,13 +1414,8 @@ class TelegramLiveHelperChatOperator {
 
                                 $sendData = self::sendTelegramMessageWithSplit($data, $params['msg'], $tchat, $topicContext);
 
-                                if (!$sendData->isOk() && $sendData->getErrorCode() == 400 && str_contains($sendData->getDescription(), 'TOPIC_DELETED') === true) {
-                                    // Reset telegram chat
-                                    $tchat->tchat_id = 0;
-                                    $tchat->updateThis(['update' => ['tchat_id']]);
-
-                                    // Process request as a new chat just
-                                    self::chatStarted(['chat' => $chat]);
+                                // Topic deleted in Telegram ("message thread not found" / TOPIC_DELETED): post the chat into a new one
+                                if (!$sendData->isOk() && self::reopenDeletedTopic($tchat, $chat, $sendData)) {
                                     return;
                                 }
 
@@ -1433,6 +1456,10 @@ class TelegramLiveHelperChatOperator {
                                         self::saveTelegramFileTopicMsgId($params['msg'], $sendFileResult, $telegramFile, $fileCaption, $topicContext);
                                     }
                                     $fileIndex++;
+                                }
+
+                                if (!empty($failedEmbedCodes) && self::reopenDeletedTopic($tchat, $chat)) {
+                                    return;
                                 }
 
                                 if (!empty($failedEmbedCodes)) {
@@ -1510,6 +1537,10 @@ class TelegramLiveHelperChatOperator {
                             }
 
                             $botSendData = self::sendTelegramMessageWithSplit($botData, $botMessage, $tchat, $topicContext);
+
+                            if (!$botSendData->isOk() && self::reopenDeletedTopic($tchat, $chat, $botSendData)) {
+                                return;
+                            }
 
                             if (!$botSendData->isOk()) {
                                 \erLhcoreClassLog::write('sendBotMessage [' . $botSendData->getErrorCode() . '] ' . $botSendData->getDescription(),

@@ -11,8 +11,9 @@
 
 ## Upstream PRs and syncing
 
-- Open PRs (2026-10-24): #97 link previews, #98 compact new chat card, #99 "/" command menu (depends on #97: both
-  add a `lhc_telegram_bot` column; #97 is merged into the #99 branch), #100 auto responder notes, #101 webhook secret.
+- Open PRs (2026-10-26): #97 link previews, #98 compact new chat card, #99 "/" command menu (depends on #97: both
+  add a `lhc_telegram_bot` column; #97 is merged into the #99 branch), #100 auto responder notes, #102 mail topics
+  (merge after #97/#99/#103), #103 topic icons, #104 escaping chat text for Telegram HTML. #101 webhook secret is merged.
   All of them are already in `mod-production`. Check they still merge together before opening a new one:
   merge them one by one onto `upstream/master` in `/root/work/tg-merge`.
 - PR branches are built in `/root/work/tg-merge` (remotes: `upstream` = LiveHelperChat, `gh` = mysubcult fork,

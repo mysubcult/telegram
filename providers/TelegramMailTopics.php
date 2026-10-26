@@ -257,7 +257,8 @@ class TelegramMailTopics
         $chatId = $message->getChat()->getId();
 
         $tChat = \erLhcoreClassModelTelegramChat::findOne(array('filter' => array('bot_id' => $tBot->id, 'tchat_id' => $message->getMessageThreadId(), 'type' => self::TYPE_MAIL)));
-        if (!($tChat instanceof \erLhcoreClassModelTelegramChat) || !\erLhcoreClassExtensionLhctelegram::isTelegramForumChatMessage($tChat, $chatId)) {
+        // Telegram thread ids are unique only within one group
+        if (!($tChat instanceof \erLhcoreClassModelTelegramChat) || (int)$tBot->group_chat_id !== (int)$chatId) {
             return null;
         }
 

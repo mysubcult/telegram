@@ -22,6 +22,10 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
  * The daily digest posts fixes it suggests itself (status suggested): "🛠 Сделать правку" turns one into a usual request (choose),
  * "✖️ Не нужно" → dismissed; a text reply to it is a request of its own with the suggestion as the parent.
+ * The digest topic is a control panel, not a log: operators' messages there are deleted once taken, a dismissed or rejected
+ * fix disappears at once, results come as short notices with "👌 Понятно" (deletes it), the service clears the rest before
+ * the next digest. Topics of chats keep the full history as before.
+ * "/compact" asks the service for a shorter bot prompt without losing rules (a usual proposal with ✅ / ✖️).
  * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
  * the digest (since the previous one) within a minute.
  * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude): the choice is written to
@@ -39,8 +43,9 @@ class TelegramFix
     const CALLBACK_ENGINE_FIX = 'dgm';  // old global /fix switch, kept for buttons already posted
     const CALLBACK_FIX_DEEPSEEK = 'fxd'; // under a new request: which AI prepares this fix
     const CALLBACK_FIX_CLAUDE = 'fxc';
+    const CALLBACK_OK = 'fxk';           // "👌 Понятно" under a result in the digest topic: deletes that message
     const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT, self::CALLBACK_SUGGESTED_TAKE,
-        self::CALLBACK_SUGGESTED_DISMISS, self::CALLBACK_ENGINE, self::CALLBACK_ENGINE_FIX, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE);
+        self::CALLBACK_SUGGESTED_DISMISS, self::CALLBACK_ENGINE, self::CALLBACK_ENGINE_FIX, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK);
     const CHOOSE_TEXT = '🛠 Чем сделать правку? 🐋 DeepSeek — копейки, 1–3 минуты; ✳️ Claude — по подписке, 2–6 минут, глубже.';
     const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
@@ -64,14 +69,51 @@ class TelegramFix
         $ok = file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) !== false;
         $digestTopicId = self::digestTopicId($bot);
 
-        return self::send($bot, array(
+        self::dropInDigest($message, $bot);
+        $ack = self::send($bot, array(
             'chat_id' => $message->getChat()->getId(),
             'message_thread_id' => (int)$message->getMessageThreadId(),
-            'reply_to_message_id' => $message->getMessageId(),
             'text' => $ok
                 ? '📊 Сводка с прошлой будет в течение минуты' . ($digestTopicId > 0 && (int)$message->getMessageThreadId() !== $digestTopicId ? ' — в теме «Сводка»' : '') . ', под ней — выбор ИИ для разбора.'
                 : 'Не удалось запросить сводку.',
         ));
+        // The service deletes this notice together with the previous digest
+        if ($ok && $ack->isOk()) {
+            $data['ack_msg_id'] = (int)$ack->getResult()->getMessageId();
+            file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+        }
+        return $ack;
+    }
+
+    private static function deleteMessage($bot, $chatId, $msgId)
+    {
+        if ((int)$msgId > 0) {
+            new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+            $response = \Longman\TelegramBot\Request::deleteMessage(array('chat_id' => $chatId, 'message_id' => (int)$msgId));
+            if (!$response->isOk()) { // older than 48 h: bots cannot delete it, at least no buttons
+                self::clearButtons($bot, $chatId, (int)$msgId);
+            }
+        }
+    }
+
+    // An operator's message in the digest topic is a command to the bot: once taken it is not needed there
+    private static function dropInDigest($message, $bot)
+    {
+        $threadId = (int)$message->getMessageThreadId();
+        if ($threadId > 0 && $threadId === self::digestTopicId($bot)) {
+            self::deleteMessage($bot, $message->getChat()->getId(), $message->getMessageId());
+        }
+    }
+
+    // Every message of a fix: the proposal, its copies from the pending list, the full-text file and screenshot previews
+    private static function deleteFixMessages($bot, $row)
+    {
+        $proposal = json_decode((string)($row['proposal'] ?? ''), true);
+        $ids = array_merge(array((int)$row['status_msg_id']), array_map('intval', array_filter(explode(',', (string)($row['extra_msg_ids'] ?? '')))),
+            array_map('intval', is_array($proposal) && isset($proposal['_attach']) && is_array($proposal['_attach']) ? $proposal['_attach'] : array()));
+        foreach (array_unique($ids) as $msgId) {
+            self::deleteMessage($bot, $row['group_chat_id'], $msgId);
+        }
     }
 
     public static function digestTopicId($bot)
@@ -130,6 +172,7 @@ class TelegramFix
         }
 
         if ($comment === '' && $threadId > 0 && $threadId === self::digestTopicId($bot)) {
+            self::dropInDigest($message, $bot);
             return self::listPending($bot, $groupChatId, $threadId);
         }
 
@@ -212,6 +255,7 @@ class TelegramFix
             }
         }
 
+        self::dropInDigest($message, $bot);
         return $ack;
     }
 
@@ -270,7 +314,7 @@ class TelegramFix
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
         if (empty($rows)) {
-            return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'text' => '✅ Правок, ждущих решения, нет.'));
+            return self::send($bot, array('chat_id' => $groupChatId, 'message_thread_id' => $threadId, 'text' => '✅ Правок, ждущих решения, нет.', 'reply_markup' => self::okKeyboard()));
         }
 
         $response = null;
@@ -335,6 +379,12 @@ class TelegramFix
             return self::EDIT_HINT;
         }
 
+        if ($action === self::CALLBACK_OK) {
+            $message = $callbackQuery->getMessage();
+            self::deleteMessage($bot, $message->getChat()->getId(), $message->getMessageId());
+            return 'Убрано';
+        }
+
         if ($action === self::CALLBACK_LIST) {
             $message = $callbackQuery->getMessage();
             self::listPending($bot, $message->getChat()->getId(), (int)$message->getMessageThreadId());
@@ -383,11 +433,28 @@ class TelegramFix
         $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
         $stmt->execute();
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-        if (is_array($row)) {
-            self::clearAllButtons($bot, $row, (int)$callbackQuery->getMessage()->getMessageId());
+        $message = $callbackQuery->getMessage();
+        $digestTopicId = self::digestTopicId($bot);
+
+        // ✖️ in the digest topic: the fix is gone from it at once (a fix of a chat topic keeps its message there, its copies go)
+        if ($action === self::CALLBACK_REJECT && is_array($row) && $digestTopicId > 0) {
+            if ((int)$row['thread_id'] === $digestTopicId) {
+                self::deleteFixMessages($bot, $row);
+                return 'Правка отклонена';
+            }
+            foreach (array_filter(explode(',', (string)$row['extra_msg_ids'])) as $copyId) {
+                self::deleteMessage($bot, $row['group_chat_id'], (int)$copyId);
+            }
+            if ((int)$message->getMessageThreadId() === $digestTopicId) {
+                self::clearButtons($bot, $row['group_chat_id'], (int)$row['status_msg_id']);
+                return 'Правка отклонена';
+            }
         }
 
-        $message = $callbackQuery->getMessage();
+        if (is_array($row)) {
+            self::clearAllButtons($bot, $row, (int)$message->getMessageId());
+        }
+
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
         \Longman\TelegramBot\Request::editMessageText(array(
             'chat_id' => $message->getChat()->getId(),
@@ -421,6 +488,11 @@ class TelegramFix
             return 'Уже обработано';
         }
 
+        if (!$take) {
+            self::deleteMessage($bot, $message->getChat()->getId(), $message->getMessageId());
+            return 'Убрано';
+        }
+
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
         \Longman\TelegramBot\Request::editMessageText(array(
             'chat_id' => $message->getChat()->getId(),
@@ -431,6 +503,11 @@ class TelegramFix
         ));
 
         return $take ? 'Выберите ИИ для правки' : 'Убрано';
+    }
+
+    private static function okKeyboard()
+    {
+        return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '👌 Понятно', 'callback_data' => self::CALLBACK_OK . '||0')));
     }
 
     private static function chooseKeyboard($fixId)

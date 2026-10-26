@@ -77,6 +77,11 @@ class GenericCommand extends SystemCommand
             }
         }
 
+        // "/compact" — a shorter bot prompt without losing rules, prepared as a usual fix proposal
+        if (strtolower((string)$command) === 'compact' && is_object($menuBot) && (int)$menuBot->bot_client === 1) {
+            return \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::handleRequest($message, $menuBot, '/compact — сжать промпт ассистента без потери правил');
+        }
+
         // In an operator topic "/name" works as the LHC bot command "!name" and "/hint" as the reply suggestion "!?",
         // so the commands can be picked from the Telegram command menu
         if ((int)$message->getMessageThreadId() > 0 && ($bangText = self::topicCommandToBang((string)$command, (string)$message->getText())) !== null) {

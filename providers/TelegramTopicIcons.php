@@ -9,7 +9,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * (getForumTopicIconStickers, no Premium needed). When a department name starts with an emoji
  * from that set — e.g. "💬 Support", "📝 Mail" — new topics of that department get it as their icon,
  * so departments are told apart at a glance (mobile clients otherwise draw the first letter).
- * Any other first character leaves the default icon.
+ * A coloured circle, square or heart ("🔵 Telegram", "🟣 Max") gives the default icon in that colour
+ * (icon_color, one of the six colours Telegram allows). Any other first character leaves the default icon.
  *
  * The set is cached per bot for a day in cache/telegram_topic_icons_<bot id>.json.
  */
@@ -17,13 +18,30 @@ class TelegramTopicIcons
 {
     const CACHE_TTL = 86400;
 
-    // Adds icon_custom_emoji_id to createForumTopic data when the department has an allowed icon
+    // icon_color values allowed by createForumTopic
+    const COLORS = array(
+        '🔵' => 7322096, '🟦' => 7322096, '💙' => 7322096,
+        '🟡' => 16766590, '🟨' => 16766590, '💛' => 16766590,
+        '🟣' => 13338331, '🟪' => 13338331, '💜' => 13338331,
+        '🟢' => 9367192, '🟩' => 9367192, '💚' => 9367192,
+        '🩷' => 16749490, '💗' => 16749490,
+        '🔴' => 16478047, '🟥' => 16478047,
+    );
+
+    // Adds icon_custom_emoji_id (or icon_color) to createForumTopic data from the department name
     public static function addIcon($bot, $department, array $data)
     {
         $iconId = self::getIconId($bot, (string)$department);
         if ($iconId !== '') {
             $data['icon_custom_emoji_id'] = $iconId;
+            return $data;
         }
+
+        $emoji = self::normalize(self::getFirstEmoji((string)$department));
+        if (isset(self::COLORS[$emoji])) {
+            $data['icon_color'] = self::COLORS[$emoji];
+        }
+
         return $data;
     }
 

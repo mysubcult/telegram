@@ -20,8 +20,6 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * Statuses: choose → new → working → proposed → approved → applying → [deploying →] applied | failed; proposed → rejected;
  * new/working/proposed → revised (a child request). A reply to an applied or rejected fix starts a follow-up with parent_id.
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
- * The daily digest posts fixes it suggests itself (status suggested): "🛠 Сделать правку" turns one into a usual request (choose),
- * "✖️ Не нужно" → dismissed; a text reply to it is a request of its own with the suggestion as the parent.
  * The digest topic is a control panel, not a log: operators' messages there are deleted once taken, a dismissed or rejected
  * fix disappears at once, results come as short notices with "👌 Понятно" (deletes it), the service clears the rest before
  * the next digest. Topics of chats keep the full history as before.
@@ -41,10 +39,10 @@ class TelegramFix
     const CALLBACK_REJECT = 'fxr';
     const CALLBACK_LIST = 'fxl';
     const CALLBACK_EDIT = 'fxe';
-    const CALLBACK_SUGGESTED_TAKE = 'fxs';
-    const CALLBACK_SUGGESTED_DISMISS = 'fxn';
     const CALLBACK_ENGINE = 'dge';      // under the digest question: the review
-    const CALLBACK_ENGINE_FIX = 'dgm';  // old global /fix switch, kept for buttons already posted
+    // Buttons of removed features, still under old messages: "🛠 Сделать правку" / "✖️ Не нужно" of digest suggestions
+    // (replaced by the pack) and the global /fix engine switch. Kept here so a click gets an answer, not another handler.
+    const CALLBACKS_OBSOLETE = array('fxs', 'fxn', 'dgm');
     const CALLBACK_FIX_DEEPSEEK = 'fxd'; // under a new request: which AI prepares this fix
     const CALLBACK_FIX_CLAUDE = 'fxc';
     const CALLBACK_OK = 'fxk';           // "👌 Понятно" under a result in the digest topic: deletes that message
@@ -58,9 +56,9 @@ class TelegramFix
         'pkr' => array(array('pack_applied'), 'pack_revert'),
     );
     const PACK_OPEN = array('pack', 'pack_ready');
-    const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT, self::CALLBACK_SUGGESTED_TAKE,
-        self::CALLBACK_SUGGESTED_DISMISS, self::CALLBACK_ENGINE, self::CALLBACK_ENGINE_FIX, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK,
-        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr');
+    const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT,
+        self::CALLBACK_ENGINE, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK,
+        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm');
     const CHOOSE_TEXT = '🛠 Чем сделать правку? 🐋 DeepSeek — копейки, 1–3 минуты; ✳️ Claude — по подписке, 2–6 минут, глубже.';
     const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
@@ -270,7 +268,7 @@ class TelegramFix
         }
 
         // A proposal or a request still in work is replaced by the child (the service drops a late result of the parent)
-        if (!$packParent && $parent !== null && in_array($parent['status'], array('choose', 'new', 'working', 'proposed', 'suggested'), true)) {
+        if (!$packParent && $parent !== null && in_array($parent['status'], array('choose', 'new', 'working', 'proposed'), true)) {
             self::setStatus((int)$parent['id'], 'revised');
             if ($threadId > 0 && $threadId === self::digestTopicId($bot) && (int)$parent['thread_id'] === $threadId) {
                 // The digest topic keeps only what waits for a decision: the replaced fix goes, its revision comes as a new message
@@ -425,16 +423,12 @@ class TelegramFix
             return self::handlePack($callbackQuery, $bot, $action, (int)$fixId);
         }
 
-        if ($action === self::CALLBACK_SUGGESTED_TAKE || $action === self::CALLBACK_SUGGESTED_DISMISS) {
-            return self::handleSuggested($callbackQuery, $bot, $action, $fixId, $operator);
+        if (in_array($action, self::CALLBACKS_OBSOLETE, true)) {
+            return 'Кнопка устарела';
         }
 
         if ($action === self::CALLBACK_ENGINE) {
             return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator);
-        }
-
-        if ($action === self::CALLBACK_ENGINE_FIX) {
-            return 'ИИ для правки теперь выбирается у каждой /fix';
         }
 
         if ($action === self::CALLBACK_FIX_DEEPSEEK || $action === self::CALLBACK_FIX_CLAUDE) {
@@ -494,44 +488,6 @@ class TelegramFix
         ));
 
         return $action === self::CALLBACK_APPLY ? 'Применяю правку' : 'Правка отклонена';
-    }
-
-    // A fix suggested by the digest: the operator who takes it becomes its author, the message turns into "preparing…"
-    private static function handleSuggested($callbackQuery, $bot, $action, $fixId, $operator)
-    {
-        $take = $action === self::CALLBACK_SUGGESTED_TAKE;
-        $message = $callbackQuery->getMessage();
-
-        $db = \ezcDbInstance::get();
-        $stmt = $db->prepare("UPDATE lhc_telegram_fix SET status = :status, operator_user_id = :operator_user_id, operator_name = :operator_name, status_msg_id = :status_msg_id, utime = :utime WHERE id = :id AND bot_id = :bot_id AND status = 'suggested'");
-        $stmt->bindValue(':status', $take ? 'choose' : 'dismissed', \PDO::PARAM_STR);
-        $stmt->bindValue(':operator_user_id', (int)$operator->user_id, \PDO::PARAM_INT);
-        $stmt->bindValue(':operator_name', (string)$operator->user->name_support, \PDO::PARAM_STR);
-        $stmt->bindValue(':status_msg_id', (int)$message->getMessageId(), \PDO::PARAM_INT);
-        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
-        $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
-        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        if ($stmt->rowCount() === 0) {
-            return 'Уже обработано';
-        }
-
-        if (!$take) {
-            self::deleteMessage($bot, $message->getChat()->getId(), $message->getMessageId());
-            return 'Убрано';
-        }
-
-        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
-        \Longman\TelegramBot\Request::editMessageText(array(
-            'chat_id' => $message->getChat()->getId(),
-            'message_id' => $message->getMessageId(),
-            'text' => ($take ? self::CHOOSE_TEXT . ' (' : '✖️ Не нужно (') . $operator->user->name_support . ")\n\n" . $message->getText(),
-            'link_preview_options' => array('is_disabled' => true),
-            'reply_markup' => $take ? self::chooseKeyboard($fixId) : new \Longman\TelegramBot\Entities\InlineKeyboard([]),
-        ));
-
-        return $take ? 'Выберите ИИ для правки' : 'Убрано';
     }
 
     private static function openPack($bot, $threadId)

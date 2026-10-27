@@ -25,7 +25,11 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * The digest topic is a control panel, not a log: operators' messages there are deleted once taken, a dismissed or rejected
  * fix disappears at once, results come as short notices with "👌 Понятно" (deletes it), the service clears the rest before
  * the next digest. Topics of chats keep the full history as before.
- * "/compact" asks the service for a shorter bot prompt without losing rules (a usual proposal with ✅ / ✖️).
+ * Digest pack (statuses pack*, rows of the digest topic): the review's suggestions are items of one pack (vote → taken | dropped,
+ * buttons pkt / pkd / pku), the pack message has "🧩 Собрать" (pkb → pack_build); the service builds all taken items into one set of
+ * edits (pack_ready: ✅ pka → pack_apply, 🔙 pkv → pack_back, 🗑 pkx → pack_cancel) and applies it at once; ↩️ pkr → pack_revert.
+ * A text reply to an item or to the pack, and any text in the digest topic while a pack is open, becomes a child request with the
+ * pack's AI (the service rewrites the item, adds an item of the owner or rebuilds the pack); these parents are never "revised".
  * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
  * the digest (since the previous one) within a minute.
  * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude): the choice is written to
@@ -44,8 +48,19 @@ class TelegramFix
     const CALLBACK_FIX_DEEPSEEK = 'fxd'; // under a new request: which AI prepares this fix
     const CALLBACK_FIX_CLAUDE = 'fxc';
     const CALLBACK_OK = 'fxk';           // "👌 Понятно" under a result in the digest topic: deletes that message
+    // Digest pack: votes under an item, the pack buttons (the service does the work, these only change the status)
+    const PACK_ITEM_ACTIONS = array('pkt' => 'taken', 'pkd' => 'dropped', 'pku' => 'vote');
+    const PACK_ACTIONS = array(
+        'pkb' => array(array('pack'), 'pack_build'),
+        'pka' => array(array('pack_ready'), 'pack_apply'),
+        'pkv' => array(array('pack_ready'), 'pack_back'),
+        'pkx' => array(array('pack', 'pack_ready'), 'pack_cancel'),
+        'pkr' => array(array('pack_applied'), 'pack_revert'),
+    );
+    const PACK_OPEN = array('pack', 'pack_ready');
     const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT, self::CALLBACK_SUGGESTED_TAKE,
-        self::CALLBACK_SUGGESTED_DISMISS, self::CALLBACK_ENGINE, self::CALLBACK_ENGINE_FIX, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK);
+        self::CALLBACK_SUGGESTED_DISMISS, self::CALLBACK_ENGINE, self::CALLBACK_ENGINE_FIX, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK,
+        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr');
     const CHOOSE_TEXT = '🛠 Чем сделать правку? 🐋 DeepSeek — копейки, 1–3 минуты; ✳️ Claude — по подписке, 2–6 минут, глубже.';
     const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
@@ -185,6 +200,11 @@ class TelegramFix
 
         // A reply to a proposal asks to rework it
         $parent = self::findByStatusMessage($bot, $replyTopicMsgId);
+        // Text in the digest topic while a pack is open goes to the pack (a new item of the owner, or a remark on the built pack)
+        if ($parent === null && $threadId > 0 && $threadId === self::digestTopicId($bot)) {
+            $parent = self::openPack($bot, $threadId);
+        }
+        $packParent = $parent !== null && (in_array($parent['status'], array('vote', 'taken', 'dropped'), true) || strpos((string)$parent['status'], 'pack') === 0);
 
         // The replied message as the operator saw it: a suggestion or a service message is not in the chat history
         $raw = \erLhcoreClassExtensionLhctelegram::getTelegramRawMessageData($message);
@@ -237,7 +257,9 @@ class TelegramFix
             'chat_id' => $groupChatId,
             'message_thread_id' => $threadId,
             'reply_parameters' => array('message_id' => $message->getMessageId()),
-            'text' => $engine !== '' ? '🛠 Переделываю правку с учётом комментария (' . (self::ENGINES[$engine] ?? $engine) . ')…' : self::CHOOSE_TEXT,
+            'text' => $engine === '' ? self::CHOOSE_TEXT : ($packParent
+                ? ($parent['status'] === 'pack' ? '➕ Добавляю ваш пункт в пакет' : ($parent['status'] === 'pack_ready' ? '🧩 Учитываю замечание, пакет пересоберётся' : '✍️ Учитываю уточнение в пункте')) . ' (' . (self::ENGINES[$engine] ?? $engine) . ')…'
+                : '🛠 Переделываю правку с учётом комментария (' . (self::ENGINES[$engine] ?? $engine) . ')…'),
             'reply_markup' => $engine !== '' ? null : self::chooseKeyboard($fixId),
         )));
         if ($ack->isOk()) {
@@ -248,9 +270,12 @@ class TelegramFix
         }
 
         // A proposal or a request still in work is replaced by the child (the service drops a late result of the parent)
-        if ($parent !== null && in_array($parent['status'], array('choose', 'new', 'working', 'proposed', 'suggested'), true)) {
+        if (!$packParent && $parent !== null && in_array($parent['status'], array('choose', 'new', 'working', 'proposed', 'suggested'), true)) {
             self::setStatus((int)$parent['id'], 'revised');
-            if ($parent['status'] === 'proposed') {
+            if ($threadId > 0 && $threadId === self::digestTopicId($bot) && (int)$parent['thread_id'] === $threadId) {
+                // The digest topic keeps only what waits for a decision: the replaced fix goes, its revision comes as a new message
+                self::deleteFixMessages($bot, $parent);
+            } elseif ($parent['status'] === 'proposed') {
                 self::clearAllButtons($bot, $parent);
             }
         }
@@ -396,6 +421,10 @@ class TelegramFix
             return 'Оператор не найден';
         }
 
+        if (isset(self::PACK_ITEM_ACTIONS[$action]) || isset(self::PACK_ACTIONS[$action])) {
+            return self::handlePack($callbackQuery, $bot, $action, (int)$fixId);
+        }
+
         if ($action === self::CALLBACK_SUGGESTED_TAKE || $action === self::CALLBACK_SUGGESTED_DISMISS) {
             return self::handleSuggested($callbackQuery, $bot, $action, $fixId, $operator);
         }
@@ -503,6 +532,91 @@ class TelegramFix
         ));
 
         return $take ? 'Выберите ИИ для правки' : 'Убрано';
+    }
+
+    private static function openPack($bot, $threadId)
+    {
+        $db = \ezcDbInstance::get();
+        $stmt = $db->prepare("SELECT * FROM lhc_telegram_fix WHERE bot_id = :bot_id AND thread_id = :thread_id AND status IN ('pack', 'pack_ready') ORDER BY id DESC LIMIT 1");
+        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+        $stmt->bindValue(':thread_id', (int)$threadId, \PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        return is_array($row) ? $row : null;
+    }
+
+    // Same keyboards as digest_pack.item_buttons in the service
+    private static function packItemKeyboard($itemId, $status)
+    {
+        if ($status === 'taken') {
+            return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '✅ Взято · передумать', 'callback_data' => 'pku||' . (int)$itemId)));
+        }
+        if ($status === 'dropped') {
+            return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '✖️ Не берём · передумать', 'callback_data' => 'pku||' . (int)$itemId)));
+        }
+        return new \Longman\TelegramBot\Entities\InlineKeyboard(array(
+            array('text' => '✅ Взять', 'callback_data' => 'pkt||' . (int)$itemId),
+            array('text' => '✖️ Не надо', 'callback_data' => 'pkd||' . (int)$itemId),
+        ));
+    }
+
+    // Digest pack buttons: a vote under an item (only while the pack is voted on) or a step of the pack; the service does the rest
+    private static function handlePack($callbackQuery, $bot, $action, $id)
+    {
+        $db = \ezcDbInstance::get();
+        $message = $callbackQuery->getMessage();
+
+        if (isset(self::PACK_ITEM_ACTIONS[$action])) {
+            $stmt = $db->prepare("UPDATE lhc_telegram_fix i JOIN lhc_telegram_fix p ON p.id = i.parent_id AND p.status = 'pack' SET i.status = :status, i.utime = :utime WHERE i.id = :id AND i.bot_id = :bot_id AND i.status IN ('vote', 'taken', 'dropped')");
+            $stmt->bindValue(':status', self::PACK_ITEM_ACTIONS[$action], \PDO::PARAM_STR);
+            $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
+            $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+            $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+            $stmt->execute();
+            if ($stmt->rowCount() === 0) {
+                return 'Пакет уже собирается или закрыт — голос не принят';
+            }
+            new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+            \Longman\TelegramBot\Request::editMessageReplyMarkup(array('chat_id' => $message->getChat()->getId(), 'message_id' => $message->getMessageId(),
+                'reply_markup' => self::packItemKeyboard($id, self::PACK_ITEM_ACTIONS[$action])));
+            return array('pkt' => 'Взято в пакет', 'pkd' => 'Не берём', 'pku' => 'Можно решить заново')[$action];
+        }
+
+        list($from, $to) = self::PACK_ACTIONS[$action];
+        if ($action === 'pkb') {
+            $stmt = $db->prepare("SELECT COUNT(*) FROM lhc_telegram_fix WHERE parent_id = :id AND status = 'taken'");
+            $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+            $stmt->execute();
+            if ((int)$stmt->fetchColumn() === 0) {
+                return 'Сначала возьмите хотя бы один пункт (✅ под ним)';
+            }
+        }
+        $stmt = $db->prepare('UPDATE lhc_telegram_fix SET status = :to, utime = :utime WHERE id = :id AND bot_id = :bot_id AND status IN (' . implode(',', array_map(function ($s) { return "'" . $s . "'"; }, $from)) . ')');
+        $stmt->bindValue(':to', $to, \PDO::PARAM_STR);
+        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+        $stmt->execute();
+        if ($stmt->rowCount() === 0) {
+            return 'Уже обработано';
+        }
+
+        $texts = array(
+            'pkb' => '🧩 Собираю пакет правок — начну в течение минуты, пакет придёт сюда же.',
+            'pka' => '⏳ Применяю пакет правок…',
+            'pkv' => '🔙 Возвращаю пакет на голосование…',
+            'pkx' => '🗑 Отменяю пакет…',
+            'pkr' => '↩️ Откатываю пакет правок…',
+        );
+        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+        \Longman\TelegramBot\Request::editMessageText(array(
+            'chat_id' => $message->getChat()->getId(),
+            'message_id' => $message->getMessageId(),
+            'text' => $texts[$action] . "\n\n" . $message->getText(),
+            'link_preview_options' => array('is_disabled' => true),
+            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
+        ));
+        return array('pkb' => 'Собираю пакет', 'pka' => 'Применяю пакет', 'pkv' => 'Снова голосование', 'pkx' => 'Пакет отменён', 'pkr' => 'Откатываю пакет')[$action];
     }
 
     private static function okKeyboard()

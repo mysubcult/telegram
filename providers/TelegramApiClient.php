@@ -17,7 +17,7 @@ class TelegramApiClient
     const MAX_WAIT_SECONDS = 10;
 
     // Expected answers that are not failures of delivery
-    const QUIET_ERRORS = array('message is not modified', 'query is too old', 'message to delete not found');
+    const QUIET_ERRORS = array('message is not modified', 'query is too old', 'message to delete not found', 'file is too big');
 
     public static function install()
     {

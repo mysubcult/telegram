@@ -27,7 +27,8 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * pack's AI (the service rewrites the item, adds an item of the owner or rebuilds the pack); these parents are never "revised".
  * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
  * the digest (since the previous one) within a minute.
- * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude): the choice is written to
+ * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude / dge||claude2 — one button per
+ * Claude account): the choice is written to
  * cache/telegram_ai_engine_<bot>.json (with the question message id); the service starts the review.
  */
 class TelegramFix
@@ -258,8 +259,8 @@ class TelegramFix
             'reply_parameters' => array('message_id' => $message->getMessageId()),
             'parse_mode' => $parent === null ? 'HTML' : null,
             'text' => $parent === null ? self::noteText($fixId, $operator->user->name_support, $comment) : ($packParent
-                ? ($parent['status'] === 'pack' ? '➕ Добавляю ваш пункт в пакет' : ($parent['status'] === 'pack_ready' ? '🧩 Учитываю замечание, пакет пересоберётся' : '✍️ Учитываю уточнение в пункте')) . ' (' . (self::ENGINES[$engine] ?? $engine) . ')…'
-                : '🛠 Переделываю правку с учётом комментария (' . (self::ENGINES[$engine] ?? $engine) . ')…'),
+                ? ($parent['status'] === 'pack' ? '➕ Добавляю ваш пункт в пакет' : ($parent['status'] === 'pack_ready' ? '🧩 Учитываю замечание, пакет пересоберётся' : '✍️ Учитываю уточнение в пункте')) . ' (' . self::engineName($engine) . ')…'
+                : '🛠 Переделываю правку с учётом комментария (' . self::engineName($engine) . ')…'),
             'reply_markup' => $parent === null ? self::noteKeyboard($fixId) : null,
         )));
         if ($ack->isOk()) {
@@ -635,12 +636,31 @@ class TelegramFix
     }
 
     // The AI for the digest review: the service reads the file (it runs as root and holds the keys)
+    // 'claude2', 'claude3' — further Claude accounts of the service, each with its own limits
+    private static function engineName($engine)
+    {
+        if (isset(self::ENGINES[$engine])) {
+            return self::ENGINES[$engine];
+        }
+        return preg_match('/^claude([2-3])$/', (string)$engine, $m) ? '✳️ Claude ' . $m[1] : (string)$engine;
+    }
+
     private static function chooseEngine($callbackQuery, $bot, $engine, $operator)
     {
-        if (!isset(self::ENGINES[$engine])) {
+        if (!isset(self::ENGINES[$engine]) && !preg_match('/^claude[2-3]$/', $engine)) {
             return 'Неизвестный вариант';
         }
         $message = $callbackQuery->getMessage();
+        // The service may name its accounts on the buttons: keep the name of the pressed one
+        $name = self::engineName($engine);
+        $raw = $message->getRawData();
+        foreach ((array)($raw['reply_markup']['inline_keyboard'] ?? array()) as $row) {
+            foreach ($row as $button) {
+                if (($button['callback_data'] ?? '') === self::CALLBACK_ENGINE . '||' . $engine && !empty($button['text'])) {
+                    $name = (string)$button['text'];
+                }
+            }
+        }
         $file = 'cache/telegram_ai_engine_' . (int)$bot->id . '.json';
         // msg_id ties a choice to the digest question: the service starts the review for it
         $data = array('engine' => $engine, 'msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);
@@ -652,10 +672,10 @@ class TelegramFix
         \Longman\TelegramBot\Request::editMessageText(array(
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
-            'text' => '🧠 ИИ-разбор: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), начну в течение минуты.',
+            'text' => '🧠 ИИ-разбор: ' . $name . ' (' . $operator->user->name_support . '), начну в течение минуты.',
             'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ));
 
-        return 'Выбрано: ' . self::ENGINES[$engine];
+        return 'Выбрано: ' . $name;
     }
 }

@@ -43,6 +43,9 @@ class GenericmessageCommand extends SystemCommand
      */
     protected $need_mysql = false;
 
+    // Why the last file could not be taken from Telegram, '' when it was taken
+    private $fileError = '';
+
     /**
      * Command execute method if MySQL is required but not available
      *
@@ -59,6 +62,11 @@ class GenericmessageCommand extends SystemCommand
     {
         //Download the photo after send message response to speedup response
         $response2 = Request::getFile(['file_id' => $fileId]);
+
+        if (!$response2->isOk()) {
+            $this->fileError = (string)$response2->getDescription();
+            return '';
+        }
 
         if ($response2->isOk()) {
             $photo_file = $response2->getResult();
@@ -415,6 +423,18 @@ class GenericmessageCommand extends SystemCommand
                             $audName = is_object($audio) ? (string)($audio->getProperty('file_name', '') ?: $audio->getFileName()) : '';
                             $audMime = is_object($audio) ? (string)($audio->getProperty('mime_type', '') ?: $audio->getMimeType()) : '';
                             $text = $this->appendCaptionToFileEmbed($message, $this->processObject($audio->getFileId(), $chat, $tBot, array('file_name' => $audName, 'mime_type' => $audMime)));
+                        }
+
+                        // Bots can download files up to 20 MB only, the visitor would get an empty message
+                        if ($this->fileError !== '') {
+                            $tooBig = stripos($this->fileError, 'too big') !== false;
+                            return Request::sendMessage([
+                                'chat_id' => $chat_id,
+                                'message_thread_id' => $message->getMessageThreadId(),
+                                'text' => '[[System Assistant]] ' . ($tooBig
+                                    ? 'Файл не отправлен клиенту: Telegram даёт боту скачать файл только до 20 МБ. Сожмите файл или пришлите ссылку на него.'
+                                    : 'Файл не отправлен клиенту: Telegram не отдал файл (' . $this->fileError . '). Попробуйте ещё раз.'),
+                            ]);
                         }
 
                         $ignoreMessage = false;

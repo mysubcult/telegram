@@ -6,19 +6,16 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * Operator corrections of the AI assistant from Telegram topics.
  *
  * "/fix what is wrong" in a chat topic (as a reply to the wrong message, or plain) or any text in the digest topic
- * stores a request in lhc_telegram_fix. A separate service (/root/smartdiag-fix/fixbot.py, runs as root because it
- * holds the AI key and the git access) picks it up, prepares an edit of the bot prompt or of a knowledge base article
- * and edits the "preparing…" message into the proposal with ✅ / ✖️. The buttons only change the status here;
- * the service applies an approved edit and reports the result in the same message.
- * "/fix ..." or plain text as a reply to a proposal asks for a revised proposal (the text never goes to the visitor);
- * the "✏️ Дополнить" button under a proposal only explains this.
- * "/fix" without text in the digest topic, or the button under the digest, lists the proposals waiting for a decision,
- * each with ✅ / ✖️ and a link to the full proposal.
- *
- * A new request first asks which AI prepares it (status choose, buttons fxd / fxc → new with engine deepseek / claude);
- * a revision keeps the engine of its parent (a reply to a digest suggestion asks too).
- * Statuses: choose → new → working → proposed → approved → applying → [deploying →] applied | failed; proposed → rejected;
- * new/working/proposed → revised (a child request). A reply to an applied or rejected fix starts a follow-up with parent_id.
+ * (while no pack is open) stores a note for the evening digest in lhc_telegram_fix (status note): no AI runs now.
+ * A text reply to the note adds to it; "✖️ Убрать" (fxu) drops it. The service (/root/smartdiag-fix/fixbot.py, runs
+ * as root because it holds the AI keys and the git access) turns the notes into taken items of the digest pack when
+ * the review runs (status merged), so they are built and applied together with the review's items.
+ * Older proposals made right away (before 29.10.2026) keep their flow: "/fix ..." or plain text as a reply to a proposal
+ * asks for a revised proposal by the same AI (the text never goes to the visitor); the "✏️ Дополнить" button only explains
+ * this; ✅ / ✖️ only change the status, the service applies an approved edit and reports the result in the same message.
+ * "/fix" without text in the digest topic, or the button under the digest, lists the proposals waiting for a decision.
+ * Statuses: note → merged | dismissed; new → working → proposed → approved → applying → [deploying →] applied | failed;
+ * proposed → rejected; new/working/proposed → revised (a child request).
  * target_text keeps the replied topic message and the operator's quote: suggestions are not chat messages.
  * The digest topic is a control panel, not a log: operators' messages there are deleted once taken, a dismissed or rejected
  * fix disappears at once, results come as short notices with "👌 Понятно" (deletes it), the service clears the rest before
@@ -41,10 +38,10 @@ class TelegramFix
     const CALLBACK_EDIT = 'fxe';
     const CALLBACK_ENGINE = 'dge';      // under the digest question: the review
     // Buttons of removed features, still under old messages: "🛠 Сделать правку" / "✖️ Не нужно" of digest suggestions
-    // (replaced by the pack) and the global /fix engine switch. Kept here so a click gets an answer, not another handler.
-    const CALLBACKS_OBSOLETE = array('fxs', 'fxn', 'dgm');
-    const CALLBACK_FIX_DEEPSEEK = 'fxd'; // under a new request: which AI prepares this fix
-    const CALLBACK_FIX_CLAUDE = 'fxc';
+    // (replaced by the pack), the global /fix engine switch and the AI choice under a /fix (/fix is a note since 29.10.2026).
+    // Kept here so a click gets an answer, not another handler.
+    const CALLBACKS_OBSOLETE = array('fxs', 'fxn', 'dgm', 'fxd', 'fxc');
+    const CALLBACK_NOTE_DROP = 'fxu';    // "✖️ Убрать" under a note for the digest
     const CALLBACK_OK = 'fxk';           // "👌 Понятно" under a result in the digest topic: deletes that message
     // Digest pack: votes under an item, the pack buttons (the service does the work, these only change the status)
     const PACK_ITEM_ACTIONS = array('pkt' => 'taken', 'pkd' => 'dropped', 'pku' => 'vote');
@@ -57,12 +54,11 @@ class TelegramFix
     );
     const PACK_OPEN = array('pack', 'pack_ready');
     const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT,
-        self::CALLBACK_ENGINE, self::CALLBACK_FIX_DEEPSEEK, self::CALLBACK_FIX_CLAUDE, self::CALLBACK_OK,
-        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm');
-    const CHOOSE_TEXT = '🛠 Чем сделать правку? 🐋 DeepSeek — копейки, 1–3 минуты; ✳️ Claude — по подписке, 2–6 минут, глубже.';
+        self::CALLBACK_ENGINE, self::CALLBACK_NOTE_DROP, self::CALLBACK_OK,
+        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm', 'fxd', 'fxc');
     const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
-    const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение.';
+    const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение. Это заметка для вечерней сводки: сразу ничего не правится.';
 
     public static function getSession()
     {
@@ -204,6 +200,11 @@ class TelegramFix
         }
         $packParent = $parent !== null && (in_array($parent['status'], array('vote', 'taken', 'dropped'), true) || strpos((string)$parent['status'], 'pack') === 0);
 
+        // A reply to a note adds to that note: still nothing runs until the digest
+        if ($parent !== null && $parent['status'] === 'note') {
+            return self::addToNote($message, $bot, $parent, $comment, $operator);
+        }
+
         // The replied message as the operator saw it: a suggestion or a service message is not in the chat history
         $raw = \erLhcoreClassExtensionLhctelegram::getTelegramRawMessageData($message);
         $replied = $replyTopicMsgId > 0 && $parent === null && isset($raw['reply_to_message']) && is_array($raw['reply_to_message']) ? $raw['reply_to_message'] : array();
@@ -230,9 +231,9 @@ class TelegramFix
 
         $db = \ezcDbInstance::get();
         $stmt = $db->prepare('INSERT INTO lhc_telegram_fix (status, engine, bot_id, group_chat_id, thread_id, chat_id, target_msg_id, target_text, request_msg_id, status_msg_id, parent_id, operator_user_id, operator_name, comment, proposal, result, ctime, utime) VALUES (:status, :engine, :bot_id, :group_chat_id, :thread_id, :chat_id, :target_msg_id, :target_text, :request_msg_id, :status_msg_id, :parent_id, :operator_user_id, :operator_name, :comment, \'\', \'\', :ctime, :utime)');
-        // A revision is made by the AI of its parent, a new request (or a reply to a digest suggestion) asks first
-        $engine = $parent !== null ? (string)$parent['engine'] : '';
-        $stmt->bindValue(':status', $engine !== '' ? 'new' : 'choose', \PDO::PARAM_STR);
+        // A new request is a note for the digest; a revision of an older proposal is made by the AI of its parent
+        $engine = $parent !== null ? ((string)$parent['engine'] !== '' ? (string)$parent['engine'] : 'deepseek') : '';
+        $stmt->bindValue(':status', $parent === null ? 'note' : 'new', \PDO::PARAM_STR);
         $stmt->bindValue(':engine', $engine, \PDO::PARAM_STR);
         $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
         $stmt->bindValue(':group_chat_id', (string)$groupChatId, \PDO::PARAM_STR);
@@ -255,10 +256,11 @@ class TelegramFix
             'chat_id' => $groupChatId,
             'message_thread_id' => $threadId,
             'reply_parameters' => array('message_id' => $message->getMessageId()),
-            'text' => $engine === '' ? self::CHOOSE_TEXT : ($packParent
+            'parse_mode' => $parent === null ? 'HTML' : null,
+            'text' => $parent === null ? self::noteText($fixId, $operator->user->name_support, $comment) : ($packParent
                 ? ($parent['status'] === 'pack' ? '➕ Добавляю ваш пункт в пакет' : ($parent['status'] === 'pack_ready' ? '🧩 Учитываю замечание, пакет пересоберётся' : '✍️ Учитываю уточнение в пункте')) . ' (' . (self::ENGINES[$engine] ?? $engine) . ')…'
                 : '🛠 Переделываю правку с учётом комментария (' . (self::ENGINES[$engine] ?? $engine) . ')…'),
-            'reply_markup' => $engine !== '' ? null : self::chooseKeyboard($fixId),
+            'reply_markup' => $parent === null ? self::noteKeyboard($fixId) : null,
         )));
         if ($ack->isOk()) {
             $update = $db->prepare('UPDATE lhc_telegram_fix SET status_msg_id = :msg_id WHERE id = :id');
@@ -280,6 +282,58 @@ class TelegramFix
 
         self::dropInDigest($message, $bot);
         return $ack;
+    }
+
+    private static function noteText($fixId, $operatorName, $comment)
+    {
+        $e = function ($text) { return htmlspecialchars((string)$text, ENT_NOQUOTES); };
+        return '📝 <b>Заметка #' . (int)$fixId . '</b> для вечерней сводки (' . $e($operatorName) . '): «' . $e(self::short($comment, 1500)) . "»\n"
+            . '<i>Сейчас ничего не правится: при разборе она станет пунктом пакета правок. Дополнить — ответьте на это сообщение.</i>';
+    }
+
+    private static function noteKeyboard($fixId)
+    {
+        return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '✖️ Убрать', 'callback_data' => self::CALLBACK_NOTE_DROP . '||' . (int)$fixId)));
+    }
+
+    private static function addToNote($message, $bot, $note, $comment, $operator)
+    {
+        $db = \ezcDbInstance::get();
+        $stmt = $db->prepare("UPDATE lhc_telegram_fix SET comment = :comment, utime = :utime WHERE id = :id AND status = 'note'");
+        $text = mb_substr($note['comment'] . "\n" . $comment, 0, 4000);
+        $stmt->bindValue(':comment', $text, \PDO::PARAM_STR);
+        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
+        $stmt->bindValue(':id', (int)$note['id'], \PDO::PARAM_INT);
+        $stmt->execute();
+        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
+        if ($stmt->rowCount() > 0) {
+            \Longman\TelegramBot\Request::editMessageText(array(
+                'chat_id' => $note['group_chat_id'],
+                'message_id' => (int)$note['status_msg_id'],
+                'parse_mode' => 'HTML',
+                'text' => self::noteText($note['id'], $note['operator_name'], $text),
+                'link_preview_options' => array('is_disabled' => true),
+                'reply_markup' => self::noteKeyboard($note['id']),
+            ));
+        }
+        self::dropInDigest($message, $bot); // in a chat topic the reply stays: the note above already shows the added text
+        return \Longman\TelegramBot\Request::emptyResponse();
+    }
+
+    private static function dropNote($callbackQuery, $bot, $fixId)
+    {
+        $db = \ezcDbInstance::get();
+        $stmt = $db->prepare("UPDATE lhc_telegram_fix SET status = 'dismissed', result = 'заметку убрали', utime = :utime WHERE id = :id AND bot_id = :bot_id AND status = 'note'");
+        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
+        $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
+        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
+        $stmt->execute();
+        if ($stmt->rowCount() === 0) {
+            return 'Заметка уже в пакете или убрана';
+        }
+        $message = $callbackQuery->getMessage();
+        self::deleteMessage($bot, $message->getChat()->getId(), $message->getMessageId());
+        return 'Заметка убрана';
     }
 
     public static function topicLink($groupChatId, $threadId, $msgId)
@@ -431,8 +485,8 @@ class TelegramFix
             return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator);
         }
 
-        if ($action === self::CALLBACK_FIX_DEEPSEEK || $action === self::CALLBACK_FIX_CLAUDE) {
-            return self::chooseFixEngine($callbackQuery, $bot, $action === self::CALLBACK_FIX_CLAUDE ? 'claude' : 'deepseek', $fixId, $operator);
+        if ($action === self::CALLBACK_NOTE_DROP) {
+            return self::dropNote($callbackQuery, $bot, $fixId);
         }
 
         $db = \ezcDbInstance::get();
@@ -578,45 +632,6 @@ class TelegramFix
     private static function okKeyboard()
     {
         return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '👌 Понятно', 'callback_data' => self::CALLBACK_OK . '||0')));
-    }
-
-    private static function chooseKeyboard($fixId)
-    {
-        return new \Longman\TelegramBot\Entities\InlineKeyboard(array(
-            array('text' => self::ENGINES['deepseek'], 'callback_data' => self::CALLBACK_FIX_DEEPSEEK . '||' . (int)$fixId),
-            array('text' => self::ENGINES['claude'], 'callback_data' => self::CALLBACK_FIX_CLAUDE . '||' . (int)$fixId),
-        ));
-    }
-
-    // The AI for one fix: the request goes to the service (it falls back to DeepSeek if Claude has no subscription token)
-    private static function chooseFixEngine($callbackQuery, $bot, $engine, $fixId, $operator)
-    {
-        $message = $callbackQuery->getMessage();
-        $db = \ezcDbInstance::get();
-        $stmt = $db->prepare("UPDATE lhc_telegram_fix SET status = 'new', engine = :engine, utime = :utime WHERE id = :id AND bot_id = :bot_id AND status = 'choose'");
-        $stmt->bindValue(':engine', $engine, \PDO::PARAM_STR);
-        $stmt->bindValue(':utime', time(), \PDO::PARAM_INT);
-        $stmt->bindValue(':id', (int)$fixId, \PDO::PARAM_INT);
-        $stmt->bindValue(':bot_id', (int)$bot->id, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        if ($stmt->rowCount() === 0) {
-            return 'Уже обработано';
-        }
-
-        // The digest suggestion stays under the line, a plain request's message is only the question
-        $text = (string)$message->getText();
-        $rest = strpos($text, self::CHOOSE_TEXT) === 0 ? ltrim(preg_replace('/^[^\n]*/u', '', $text)) : '';
-        new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
-        \Longman\TelegramBot\Request::editMessageText(array(
-            'chat_id' => $message->getChat()->getId(),
-            'message_id' => $message->getMessageId(),
-            'text' => '🛠 Готовлю правку: ' . self::ENGINES[$engine] . ' (' . $operator->user->name_support . '), обычно это ' . ($engine === 'claude' ? '2–6' : '1–3') . ' минуты…' . ($rest !== '' ? "\n\n" . $rest : ''),
-            'link_preview_options' => array('is_disabled' => true),
-            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
-        ));
-
-        return 'Готовлю правку: ' . self::ENGINES[$engine];
     }
 
     // The AI for the digest review: the service reads the file (it runs as root and holds the keys)

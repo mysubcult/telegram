@@ -30,7 +30,7 @@ class TelegramTopicCommands
     {
         $menu = array(
             array('command' => 'hint', 'description' => 'Подсказка ответа от ИИ (как «!?»)'),
-            array('command' => 'fix', 'description' => 'Ассистент ошибся: что исправить (ответом на сообщение)'),
+            array('command' => 'fix', 'description' => 'Заметка в вечернюю сводку: что ассистент сделал не так'),
             array('command' => 'digest', 'description' => 'Сводка по чатам сейчас (с прошлой сводки), с выбором ИИ для разбора'),
         );
 

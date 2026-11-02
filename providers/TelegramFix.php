@@ -58,7 +58,7 @@ class TelegramFix
         'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm', 'fxd', 'fxc');
     const ENGINES = array('deepseek' => '🐋 DeepSeek');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
-    const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение. Это заметка для вечерней сводки: сразу ничего не правится.';
+    const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение. Это заметка для еженедельной сводки: сразу ничего не правится.';
 
     public static function getSession()
     {
@@ -287,7 +287,7 @@ class TelegramFix
     private static function noteText($fixId, $operatorName, $comment)
     {
         $e = function ($text) { return htmlspecialchars((string)$text, ENT_NOQUOTES); };
-        return '📝 <b>Заметка #' . (int)$fixId . '</b> для вечерней сводки (' . $e($operatorName) . '): «' . $e(self::short($comment, 1500)) . "»\n"
+        return '📝 <b>Заметка #' . (int)$fixId . '</b> для еженедельной сводки (' . $e($operatorName) . '): «' . $e(self::short($comment, 1500)) . "»\n"
             . '<i>Сейчас ничего не правится: при разборе она станет пунктом пакета правок. Дополнить — ответьте на это сообщение.</i>';
     }
 

@@ -27,8 +27,7 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * pack's AI (the service rewrites the item, adds an item of the owner or rebuilds the pack); these parents are never "revised".
  * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
  * the digest (since the previous one) within a minute.
- * Under the digest the service asks which AI makes the review (dge||deepseek / dge||claude / dge||claude2 — one button per
- * Claude account): the choice is written to
+ * Under the digest the service asks whether to make the AI review (dge||deepseek): the choice is written to
  * cache/telegram_ai_engine_<bot>.json (with the question message id); the service starts the review.
  */
 class TelegramFix
@@ -57,7 +56,7 @@ class TelegramFix
     const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT,
         self::CALLBACK_ENGINE, self::CALLBACK_NOTE_DROP, self::CALLBACK_OK,
         'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm', 'fxd', 'fxc');
-    const ENGINES = array('deepseek' => '🐋 DeepSeek', 'claude' => '✳️ Claude');
+    const ENGINES = array('deepseek' => '🐋 DeepSeek');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение. Это заметка для вечерней сводки: сразу ничего не правится.';
 
@@ -636,31 +635,18 @@ class TelegramFix
     }
 
     // The AI for the digest review: the service reads the file (it runs as root and holds the keys)
-    // 'claude2', 'claude3' — further Claude accounts of the service, each with its own limits
     private static function engineName($engine)
     {
-        if (isset(self::ENGINES[$engine])) {
-            return self::ENGINES[$engine];
-        }
-        return preg_match('/^claude([2-3])$/', (string)$engine, $m) ? '✳️ Claude ' . $m[1] : (string)$engine;
+        return self::ENGINES[$engine] ?? self::ENGINES['deepseek'];
     }
 
     private static function chooseEngine($callbackQuery, $bot, $engine, $operator)
     {
-        if (!isset(self::ENGINES[$engine]) && !preg_match('/^claude[2-3]$/', $engine)) {
+        if (!isset(self::ENGINES[$engine])) {
             return 'Неизвестный вариант';
         }
         $message = $callbackQuery->getMessage();
-        // The service may name its accounts on the buttons: keep the name of the pressed one
         $name = self::engineName($engine);
-        $raw = $message->getRawData();
-        foreach ((array)($raw['reply_markup']['inline_keyboard'] ?? array()) as $row) {
-            foreach ($row as $button) {
-                if (($button['callback_data'] ?? '') === self::CALLBACK_ENGINE . '||' . $engine && !empty($button['text'])) {
-                    $name = (string)$button['text'];
-                }
-            }
-        }
         $file = 'cache/telegram_ai_engine_' . (int)$bot->id . '.json';
         // msg_id ties a choice to the digest question: the service starts the review for it
         $data = array('engine' => $engine, 'msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);

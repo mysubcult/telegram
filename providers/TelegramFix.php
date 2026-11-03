@@ -83,7 +83,7 @@ class TelegramFix
             'chat_id' => $message->getChat()->getId(),
             'message_thread_id' => (int)$message->getMessageThreadId(),
             'text' => $ok
-                ? '📊 Сводка с прошлой будет в течение минуты' . ($digestTopicId > 0 && (int)$message->getMessageThreadId() !== $digestTopicId ? ' — в теме «Сводка»' : '') . ', под ней — выбор ИИ для разбора.'
+                ? '📊 Сводка с прошлой будет в течение минуты' . ($digestTopicId > 0 && (int)$message->getMessageThreadId() !== $digestTopicId ? ' — в теме «Сводка»' : '') . ', под ней — файл для ИИ.'
                 : 'Не удалось запросить сводку.',
         ));
         // The service deletes this notice together with the previous digest
@@ -288,7 +288,7 @@ class TelegramFix
     {
         $e = function ($text) { return htmlspecialchars((string)$text, ENT_NOQUOTES); };
         return '📝 <b>Заметка #' . (int)$fixId . '</b> для еженедельной сводки (' . $e($operatorName) . '): «' . $e(self::short($comment, 1500)) . "»\n"
-            . '<i>Сейчас ничего не правится: при разборе она станет пунктом пакета правок. Дополнить — ответьте на это сообщение.</i>';
+            . '<i>Сейчас ничего не правится: заметка попадёт в файл для ИИ под сводкой. Дополнить — ответьте на это сообщение.</i>';
     }
 
     private static function noteKeyboard($fixId)

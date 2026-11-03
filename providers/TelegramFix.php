@@ -27,8 +27,9 @@ namespace LiveHelperChatExtension\lhctelegram\providers;
  * pack's AI (the service rewrites the item, adds an item of the owner or rebuilds the pack); these parents are never "revised".
  * "/digest" asks for the digest now: the request goes to cache/telegram_digest_request_<bot>.json, the service sends
  * the digest (since the previous one) within a minute.
- * Under the digest the service asks whether to make the AI review (dge||deepseek): the choice is written to
- * cache/telegram_ai_engine_<bot>.json (with the question message id); the service starts the review.
+ * Under the digest the service sends a file for the owner's AI (no AI on the server since 03.11.2026). "✅ Разобрано" under it
+ * (dgd) is written to cache/telegram_digest_done_<bot>.json with the file message id: the service closes the notes of that
+ * export, and the next export starts from new chats.
  */
 class TelegramFix
 {
@@ -36,11 +37,12 @@ class TelegramFix
     const CALLBACK_REJECT = 'fxr';
     const CALLBACK_LIST = 'fxl';
     const CALLBACK_EDIT = 'fxe';
-    const CALLBACK_ENGINE = 'dge';      // under the digest question: the review
+    const CALLBACK_EXPORT_DONE = 'dgd'; // "✅ Разобрано" under the export file for the owner's AI
     // Buttons of removed features, still under old messages: "🛠 Сделать правку" / "✖️ Не нужно" of digest suggestions
-    // (replaced by the pack), the global /fix engine switch and the AI choice under a /fix (/fix is a note since 29.10.2026).
+    // (replaced by the pack), the global /fix engine switch, the AI choice under a /fix (/fix is a note since 29.10.2026)
+    // and the AI review question under the digest (the export file since 03.11.2026).
     // Kept here so a click gets an answer, not another handler.
-    const CALLBACKS_OBSOLETE = array('fxs', 'fxn', 'dgm', 'fxd', 'fxc');
+    const CALLBACKS_OBSOLETE = array('fxs', 'fxn', 'dgm', 'fxd', 'fxc', 'dge');
     const CALLBACK_NOTE_DROP = 'fxu';    // "✖️ Убрать" under a note for the digest
     const CALLBACK_OK = 'fxk';           // "👌 Понятно" under a result in the digest topic: deletes that message
     // Digest pack: votes under an item, the pack buttons (the service does the work, these only change the status)
@@ -54,8 +56,8 @@ class TelegramFix
     );
     const PACK_OPEN = array('pack', 'pack_ready');
     const CALLBACKS = array(self::CALLBACK_APPLY, self::CALLBACK_REJECT, self::CALLBACK_LIST, self::CALLBACK_EDIT,
-        self::CALLBACK_ENGINE, self::CALLBACK_NOTE_DROP, self::CALLBACK_OK,
-        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm', 'fxd', 'fxc');
+        self::CALLBACK_EXPORT_DONE, self::CALLBACK_NOTE_DROP, self::CALLBACK_OK,
+        'pkt', 'pkd', 'pku', 'pkb', 'pka', 'pkv', 'pkx', 'pkr', 'fxs', 'fxn', 'dgm', 'fxd', 'fxc', 'dge');
     const ENGINES = array('deepseek' => '🐋 DeepSeek');
     const EDIT_HINT = 'Ответьте на это сообщение текстом: что добавить или изменить в правке. ИИ переделает её с учётом ваших слов, клиенту ответ не уйдёт.';
     const USAGE = 'Напишите после /fix, что не так, например: «/fix нельзя менять подписку на другую, только новая оплата». Лучше ответом на неверное сообщение. Это заметка для еженедельной сводки: сразу ничего не правится.';
@@ -481,8 +483,8 @@ class TelegramFix
             return 'Кнопка устарела';
         }
 
-        if ($action === self::CALLBACK_ENGINE) {
-            return self::chooseEngine($callbackQuery, $bot, (string)$fixId, $operator);
+        if ($action === self::CALLBACK_EXPORT_DONE) {
+            return self::exportDone($callbackQuery, $bot, $operator);
         }
 
         if ($action === self::CALLBACK_NOTE_DROP) {
@@ -634,34 +636,28 @@ class TelegramFix
         return new \Longman\TelegramBot\Entities\InlineKeyboard(array(array('text' => '👌 Понятно', 'callback_data' => self::CALLBACK_OK . '||0')));
     }
 
-    // The AI for the digest review: the service reads the file (it runs as root and holds the keys)
+    // The AI of the old digest pack (replies to its items)
     private static function engineName($engine)
     {
         return self::ENGINES[$engine] ?? self::ENGINES['deepseek'];
     }
 
-    private static function chooseEngine($callbackQuery, $bot, $engine, $operator)
+    // The service (root) closes the notes of the export: it sees the file within a minute
+    private static function exportDone($callbackQuery, $bot, $operator)
     {
-        if (!isset(self::ENGINES[$engine])) {
-            return 'Неизвестный вариант';
-        }
         $message = $callbackQuery->getMessage();
-        $name = self::engineName($engine);
-        $file = 'cache/telegram_ai_engine_' . (int)$bot->id . '.json';
-        // msg_id ties a choice to the digest question: the service starts the review for it
-        $data = array('engine' => $engine, 'msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);
-        if (file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) === false) {
-            return 'Не удалось сохранить выбор';
+        $data = array('msg_id' => (int)$message->getMessageId(), 'ts' => time(), 'operator' => (string)$operator->user->name_support);
+        if (file_put_contents('cache/telegram_digest_done_' . (int)$bot->id . '.json', json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX) === false) {
+            return 'Не удалось отметить';
         }
 
         new \Longman\TelegramBot\Telegram($bot->bot_api, $bot->bot_username);
-        \Longman\TelegramBot\Request::editMessageText(array(
+        \Longman\TelegramBot\Request::editMessageReplyMarkup(array(
             'chat_id' => $message->getChat()->getId(),
             'message_id' => $message->getMessageId(),
-            'text' => '🧠 ИИ-разбор: ' . $name . ' (' . $operator->user->name_support . '), начну в течение минуты.',
             'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ));
 
-        return 'Выбрано: ' . $name;
+        return 'Отмечено: заметки закроются в течение минуты';
     }
 }

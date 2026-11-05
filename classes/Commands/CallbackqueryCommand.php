@@ -113,6 +113,11 @@ class CallbackqueryCommand extends SystemCommand
 
             $answer = \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleCallback($callback_query, $tBot, $paramsCallback[0], $paramsCallback[1] ?? 0, $paramsCallback[2] ?? 0);
 
+            // null = the press was already answered inside (sending a suggestion answers before delivery)
+            if ($answer === null) {
+                return Request::emptyResponse();
+            }
+
             return Request::answerCallbackQuery([
                 'callback_query_id' => $callback_query_id,
                 'text'              => $answer,

@@ -653,6 +653,7 @@ class TelegramSuggest
 
         $topicContext = array('bot_id' => (int)$tBot->id, 'group_chat_id' => (string)$tBot->group_chat_id, 'thread_id' => (int)$message->getMessageThreadId());
         $lockNamespace = 'suggest_' . $topicContext['bot_id'] . '_' . $topicContext['group_chat_id'];
+        $started = microtime(true);
 
         // Double tap: the second press waits for the first one and then sees the message as used
         TelegramLiveHelperChatOperator::acquireTelegramMessageLock($topicMsgId, $lockNamespace);
@@ -660,20 +661,52 @@ class TelegramSuggest
             if (self::isTopicMessageUsed($chat->id, $topicMsgId)) {
                 return 'Уже отправлено';
             }
-            self::sendAsOperator($chat, $operator, $text, $topicMsgId, $topicContext);
+
+            // Sending runs every chat.web_add_msg_admin listener (delivery to the visitor's messenger, typing, webhooks)
+            // and may accept the chat first. Answer the press and drop the buttons right away, so the operator sees
+            // progress instead of a spinning button and cannot press twice.
+            \Longman\TelegramBot\Request::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId(), 'text' => 'Отправляю…']);
+            self::editSuggestion($groupChatId, $topicMsgId, '⏳ Отправляю…' . "\n\n" . $text);
+            $answered = microtime(true);
+
+            try {
+                self::sendAsOperator($chat, $operator, $text, $topicMsgId, $topicContext);
+            } catch (\Throwable $e) {
+                self::editSuggestion($groupChatId, $topicMsgId, '⚠️ Не отправлено, попробуйте ещё раз (' . $e->getMessage() . '):' . "\n\n" . $text, self::buildKeyboard($chat->id));
+                self::logTiming($chat->id, $started, $answered, microtime(true), 'error: ' . $e->getMessage());
+                return null;
+            }
+            $sent = microtime(true);
         } finally {
             TelegramLiveHelperChatOperator::releaseTelegramMessageLock($topicMsgId, $lockNamespace);
         }
 
-        \Longman\TelegramBot\Request::editMessageText([
+        self::editSuggestion($groupChatId, $topicMsgId, '✅ Отправлено (' . $operator->user->name_support . '):' . "\n\n" . $text);
+        self::logTiming($chat->id, $started, $answered, $sent, 'ok');
+
+        // The press is already answered above
+        return null;
+    }
+
+    public static function editSuggestion($groupChatId, $topicMsgId, $text, $keyboard = null)
+    {
+        return \Longman\TelegramBot\Request::editMessageText([
             'chat_id' => $groupChatId,
             'message_id' => $topicMsgId,
-            'text' => '✅ Отправлено (' . $operator->user->name_support . '):' . "\n\n" . $text,
+            'text' => $text,
             'link_preview_options' => array('is_disabled' => true),
-            'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([]),
+            'reply_markup' => $keyboard ?? new \Longman\TelegramBot\Entities\InlineKeyboard([]),
         ]);
+    }
 
-        return 'Отправлено';
+    /**
+     * One line per sent suggestion in cache/telegram_suggest_send.log: how long the operator waited for the
+     * first reaction and how long delivery to the visitor took.
+     */
+    public static function logTiming($chatId, $started, $answered, $sent, $result)
+    {
+        $line = sprintf("%s chat=%d answer_ms=%d send_ms=%d result=%s\n", date('Y-m-d H:i:s'), $chatId, ($answered - $started) * 1000, ($sent - $answered) * 1000, $result);
+        @file_put_contents('cache/telegram_suggest_send.log', $line, FILE_APPEND | LOCK_EX);
     }
 
     /**

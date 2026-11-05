@@ -414,6 +414,8 @@ class TelegramLiveHelperChatOperator {
         $method = 'sendDocument';
         $field = 'document';
         $isStickerCandidate = false;
+        $isVoiceRecording = false;
+        $tempVoiceFile = null;
 
         if ($extension === 'tgs') {
             $method = 'sendSticker';
@@ -446,6 +448,11 @@ class TelegramLiveHelperChatOperator {
         } elseif (in_array($extension, array('mp3', 'm4a')) || in_array($type, array('audio/mpeg', 'audio/mp4'))) {
             $method = 'sendAudio';
             $field = 'audio';
+            if (self::isWidgetVoiceRecording($file) && self::getVoiceRecordSetting('send_as_voice', true)) {
+                $method = 'sendVoice';
+                $field = 'voice';
+                $isVoiceRecording = true;
+            }
         } elseif ($extension === 'mp4' || $type === 'video/mp4') {
             $method = 'sendVideo';
             $field = 'video';
@@ -492,6 +499,14 @@ class TelegramLiveHelperChatOperator {
                 $multipartFilePath = $file->file_path_server;
                 $multipartFileField = $field;
             }
+            // Voice recorded in the widget: an OGG/Opus copy is what Telegram itself records (waveform, speed, transcription).
+            // Without a converter the MP3 goes as a voice message as it is. The LHC file is never changed.
+            if ($isVoiceRecording && $tempUploadDir && is_dir($tempUploadDir)) {
+                $tempVoiceFile = self::convertVoiceRecording($multipartFilePath, $tempUploadDir);
+                if ($tempVoiceFile !== null) {
+                    $multipartFilePath = $tempVoiceFile;
+                }
+            }
             $fileHandle = \Longman\TelegramBot\Request::encodeFile($multipartFilePath);
             if (is_resource($fileHandle)) {
                 $data[$field] = $fileHandle;
@@ -518,6 +533,30 @@ class TelegramLiveHelperChatOperator {
             if ($sendData->isOk()) {
                 $msgIds = self::getTelegramSendMessageIds($sendData);
                 return !empty($msgIds) ? (int)$msgIds[0] : true;
+            }
+
+            if ($isVoiceRecording) {
+                \erLhcoreClassLog::write('SendVoice rejected ['.$sendData->getErrorCode().'] '. $sendData->getDescription() . ', sending as audio',
+                    \ezcLog::SUCCESS_AUDIT,
+                    array(
+                        'source' => 'lhc',
+                        'category' => 'telegram_exception',
+                        'line' => __LINE__,
+                        'file' => __FILE__,
+                        'object_id' => $tchat->id
+                    )
+                );
+                if (isset($data['voice']) && is_resource($data['voice'])) {
+                    @fclose($data['voice']);
+                }
+                unset($data['voice']);
+                $audioPath = ($tempUploadFile && file_exists($tempUploadFile)) ? $tempUploadFile : $file->file_path_server;
+                $fallbackSendData = self::sendTelegramRequest('sendAudio', $data, $audioPath, 'audio');
+                if ($fallbackSendData->isOk()) {
+                    self::$lastTelegramSendData = $fallbackSendData;
+                    $msgIds = self::getTelegramSendMessageIds($fallbackSendData);
+                    return !empty($msgIds) ? (int)$msgIds[0] : true;
+                }
             }
 
             if ($isStickerCandidate) {
@@ -576,6 +615,9 @@ class TelegramLiveHelperChatOperator {
 
             return self::sendTelegramChatFileAsLinkMessage($tchat, $file, $caption, $disableNotification, $params, $msg, $topicContext, 'exception');
         } finally {
+            if ($tempVoiceFile && file_exists($tempVoiceFile)) {
+                @unlink($tempVoiceFile);
+            }
             if ($tempUploadFile && file_exists($tempUploadFile)) {
                 @unlink($tempUploadFile);
             }
@@ -611,6 +653,52 @@ class TelegramLiveHelperChatOperator {
         }
 
         return $data;
+    }
+
+    // The widget uploads a recorded voice message as «record.mp3» (VoiceMessage.js)
+    public static function isWidgetVoiceRecording($file)
+    {
+        $extension = strtolower((string)$file->extension);
+        $type = strtolower((string)$file->type);
+        return (string)$file->upload_name === 'record.mp3' && ($extension === 'mp3' || $type === 'audio/mpeg');
+    }
+
+    public static function getVoiceRecordSetting($key, $default)
+    {
+        $settings = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->settings;
+        return (isset($settings['voice_record']) && is_array($settings['voice_record']) && array_key_exists($key, $settings['voice_record'])) ? $settings['voice_record'][$key] : $default;
+    }
+
+    // Converts a widget voice recording with settings voice_record.convert_command ({file_orig}, {file_dest}).
+    // Returns the converted file in $dir or null (no command, converter missing or failed).
+    public static function convertVoiceRecording($sourcePath, $dir)
+    {
+        $command = (string)self::getVoiceRecordSetting('convert_command', '');
+        if ($command === '' || !is_file($sourcePath)) {
+            return null;
+        }
+        $destination = $dir . '/voice.ogg';
+        $cmd = str_replace(array('{file_orig}', '{file_dest}'), array(escapeshellarg($sourcePath), escapeshellarg($destination)), $command);
+        $output = array();
+        $exitCode = 1;
+        @exec($cmd . ' 2>&1', $output, $exitCode);
+        if ($exitCode === 0 && is_file($destination) && filesize($destination) > 0) {
+            return $destination;
+        }
+        if (is_file($destination)) {
+            @unlink($destination);
+        }
+        \erLhcoreClassLog::write('Voice recording conversion failed [' . $exitCode . '] ' . mb_substr(implode(' ', $output), 0, 300),
+            \ezcLog::SUCCESS_AUDIT,
+            array(
+                'source' => 'lhc',
+                'category' => 'telegram_exception',
+                'line' => __LINE__,
+                'file' => __FILE__,
+                'object_id' => 0
+            )
+        );
+        return null;
     }
 
     public static function sendTelegramRequest($method, array $data, $multipartFilePath = '', $multipartFileField = '')

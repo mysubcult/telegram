@@ -15,6 +15,12 @@ return array(
         'delay' => 4, // auto mode: seconds to wait for operator's own reply
         'captions' => false // describe every visitor file once (caption_ocr), see providers/TelegramFileCaption.php
     ),
+    // Voice messages recorded in the widget (record.mp3) go to operator topics as Telegram voice messages.
+    // convert_command makes an OGG/Opus copy for Telegram ({file_orig}, {file_dest}); empty = send the MP3 as it is.
+    'voice_record' => array(
+        'send_as_voice' => true,
+        'convert_command' => ''
+    ),
     'elastic_search' => array(
         'search_attr' => 'attr_int_1'
     )

@@ -25,6 +25,9 @@
   `origin` = this live dir). PR text and code must stay generic: no SmartDiag names, domains, IPs, Russian texts.
 - Commit author must be `mysubcult <mysubcult1@gmail.com>` (root's default identity leaks the server hostname).
 
+- 05.11.2026: #108 widget voice recordings (`record.mp3`) → `sendVoice`, optional `voice_record.convert_command`
+  (live: ffmpeg → OGG/Opus 64k mono, in the gitignored `settings.ini.php`); fork commit fe6184e.
+
 ## What the author rejected (do not re-propose)
 
 - Things the bot builder can do (triggers, chat status, accepting a chat on a command, answering callback queries:

@@ -32,10 +32,12 @@ class TelegramTopicCommands
             array('command' => 'hint', 'description' => 'Подсказка ответа от ИИ (как «!?»)'),
             array('command' => 'fix', 'description' => 'Заметка в еженедельную сводку: что ассистент сделал не так'),
             array('command' => 'digest', 'description' => 'Сводка по чатам сейчас (с прошлой сводки), с выбором ИИ для разбора'),
+            array('command' => 'paid', 'description' => 'Отметить оплату переводом/СБП вне сайта: /paid 4900 Diagzone 1 год'),
+            array('command' => 'unpaid', 'description' => 'Отменить последнюю отметку /paid'),
         );
 
         foreach (explode(', ', self::normalizeList($bot->topic_commands)) as $name) {
-            if ($name === '' || in_array($name, array('hint', 'fix', 'digest', 'ban', 'endchat'), true)) {
+            if ($name === '' || in_array($name, array('hint', 'fix', 'digest', 'paid', 'unpaid', 'ban', 'endchat'), true)) {
                 continue;
             }
             $command = \erLhcoreClassModelGenericBotCommand::findOne(array('filter' => array('command' => $name)));

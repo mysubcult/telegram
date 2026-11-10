@@ -63,6 +63,14 @@ class GenericCommand extends SystemCommand
             }
         }
 
+        // "/paid 4900 Diagzone 1 год", "/unpaid" — a payment taken outside the site (providers/TelegramManualSale.php)
+        if (\LiveHelperChatExtension\lhctelegram\providers\TelegramManualSale::isCommand($command)) {
+            $tBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
+            if (is_object($tBot) && (int)$tBot->bot_client === 1) {
+                return \LiveHelperChatExtension\lhctelegram\providers\TelegramManualSale::handle($message, $tBot, $command, (string)$message->getText());
+            }
+        }
+
         // Keep the "/" menu of the group in line with the LHC commands also when operators only use commands
         $menuBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
         if (is_object($menuBot) && (int)$menuBot->bot_client === 1) {

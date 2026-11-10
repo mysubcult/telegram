@@ -24,6 +24,7 @@
 
 ## Topic commands, file captions, /fix
 
+- `/paid`, `/unpaid` are handled in `GenericCommand.php` before the `/name` → `!name` mapping (`providers/TelegramManualSale.php`, see AGENTS.md); they are fixed entries of the "/" menu like `/hint`, `/fix`, `/digest`.
 - `/name` in a topic = `!name` (`classes/Commands/GenericCommand.php`); `/hint` = `!?`. The "/" menu lists the bot option "Commands in the "/" menu of the group" (`lhc_telegram_bot.topic_commands`), `providers/TelegramTopicCommands.php` re-sends it on change. Do not use LHC core flags (e.g. "Enabled for display") for Telegram behaviour.
 - Bot option `disable_link_preview`: applied in `sendTelegramRequest()`, `sendTelegramRequestOnce()` and `sendTelegramMessageWithSplit()` (bot replies go through the last one directly).
 - `providers/TelegramFileCaption.php`: every visitor photo/voice/PDF is described once (resque → worker `deepseek-flash@describe`) into core `lh_chat_file.caption_ocr`; suggestions list the descriptions of earlier files. Setting `suggest.captions`.

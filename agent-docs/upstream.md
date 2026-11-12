@@ -28,6 +28,11 @@
 - 05.11.2026: #108 widget voice recordings (`record.mp3`) → `sendVoice`, optional `voice_record.convert_command`
   (live: ffmpeg → OGG/Opus 64k mono, in the gitignored `settings.ini.php`); fork commit fe6184e.
 
+- 12.11.2026: #109 template `doc/telegram/incoming-webhook.json` — `{{msg.message.caption}}` for documents, audio, video
+  (`msg_attachments`, `msg_img_5`, `msg_img_6`); live incoming webhook 11 already has it. Upstream unchanged since 26.10 —
+  `mod-production` contains all of `origin/master`. Upstream's `Debug` trigger is active (posts HTTP errors as a system note);
+  ours stays off — non-200/403 delivery errors go to bot triggers 2172 (TG) / 2173 (MAX) as a bot note seen in the topic.
+
 ## What the author rejected (do not re-propose)
 
 - Things the bot builder can do (triggers, chat status, accepting a chat on a command, answering callback queries:

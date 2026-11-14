@@ -21,6 +21,8 @@ class TelegramLiveHelperChatOperator {
         $dispatcher->listen('chat.genericbot_get_trigger_click_processed', self::class . '::triggerClicked');
         $dispatcher->listen('onlineuser.pageview_logged', self::class . '::pageViewLogged');
 
+        $dispatcher->listen('chat.replace_message_bot', SmartiHandoff::class . '::replaceSummary');
+
         // Reply suggestions in operator topics (after messageAdded, so the topic already exists)
         $dispatcher->listen('chat.addmsguser', TelegramSuggest::class . '::visitorMessageAdded');
         $dispatcher->listen('chat.messages_added_passive', TelegramSuggest::class . '::visitorMessageAdded');

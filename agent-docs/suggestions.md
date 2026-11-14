@@ -4,7 +4,7 @@
 
 - Operator writes `!?` in a topic. As a Telegram reply to a visitor message → suggestion for that message (reply to
   an operator/bot message → the nearest visitor message before it); plain → the latest visitor message.
-  `!?` is deleted and never reaches the visitor. Only for accepted (ACTIVE) chats.
+  `!?` is deleted and never reaches the visitor. Works for accepted, pending and bot chats; Send accepts a pending/bot chat for the operator.
 - A resque job (`lhc_telegram_suggest`) calls LHC REST API `rest_api_id` (105 «Смарти | Подсказки оператору»).
   The prompt, model and history template live in that REST API record in LHC admin, not in code. History ends at
   the chosen message: `shiftHistory` adds an offset to `{previous_visitor_messages_list_url__20__N}`.
@@ -14,7 +14,7 @@
 - Albums: one LHC message can be several topic messages (MAX/Telegram text + photos → `tg_topic_msg_ids`, map entry
   per photo with `file_id`). The replied topic message id travels with the job (`topic_msg_id`): the suggestion replies
   to that photo and the model is told which attachment the operator pointed at (`pointedFileNote`).
-- The suggestion arrives as a reply to the chosen message with «✅ Отправить» (`sgs||chat`) / «✖️» (`sgx||chat`).
+- The suggestion arrives as a reply to the chosen message with «✅ Отправить», «✏️ Изменить» and «✖️».
   Send posts the text as the operator's own message and maps it to the suggestion's topic message id.
 - Model answers `SKIP: <reason>` when there is nothing to suggest → «💡 Подсказки нет: <reason>».
 - Settings `suggest`: `enabled`, `mode` (`command` default; `button` = «💡 Ответ» under visitor messages;
@@ -27,4 +27,31 @@
 - `/name` in a topic = `!name` (`classes/Commands/GenericCommand.php`); `/hint` = `!?`. The "/" menu lists the bot option "Commands in the "/" menu of the group" (`lhc_telegram_bot.topic_commands`), `providers/TelegramTopicCommands.php` re-sends it on change. Do not use LHC core flags (e.g. "Enabled for display") for Telegram behaviour.
 - Bot option `disable_link_preview`: applied in `sendTelegramRequest()`, `sendTelegramRequestOnce()` and `sendTelegramMessageWithSplit()` (bot replies go through the last one directly).
 - `providers/TelegramFileCaption.php`: every visitor photo/voice/PDF is described once (resque → worker `deepseek-flash@describe`) into core `lh_chat_file.caption_ocr`; suggestions list the descriptions of earlier files. Setting `suggest.captions`.
-- `/fix …` (`providers/TelegramFix.php`), text in the digest topic and a plain-text reply to a fix message (never sent to the visitor) store a row in `lhc_telegram_fix`; The digest topic is a control panel: operators' messages there are deleted once taken, ✖️ / «Не нужно» delete the fix messages, results come from the service as notices with «👌 Понятно» (`fxk` deletes); The digest's suggestions are items of one pack (statuses `pack*`, items `vote`/`taken`/`dropped`, buttons `pkt`/`pkd`/`pku` under an item, `pkb`/`pka`/`pkv`/`pkx`/`pkr` for the pack — `TelegramFix::handlePack` only changes the status); any text in the digest topic while a pack is open, or a reply to an item or to the pack, is a child request with the pack's AI, never `revised`; a revised fix in the digest topic is deleted at once. `/digest` (in any topic) asks the root service for the digest now (`cache/telegram_digest_request_<bot>.json`); `/fix` itself is only a note (status `note`) for the evening review, which runs on DeepSeek by the `dge` button under the digest (old buttons `fxd`/`fxc` are obsolete); buttons `fxa`/`fxr` only change its status. The AI part and applying edits run outside LHC: `/root/smartdiag-fix/fixbot.py` (private repo `mysubcult/smartdiag-fix`, see its AGENTS.md; targets docs, site, REST 104 prompt, REST 105 suggestion prompt) (root, systemd `smartdiag-fix.timer` every minute: DeepSeek key, git push to the docs repo, REST 104 prompt edits with backups in `/root/lhc-production-backups/fix/`, daily digest at 19:00 MSK into the topic stored in `cache/telegram_digest_topic_<bot>.json`).
+- `/fix …` and plain-text replies to a fix message store notes in `lhc_telegram_fix`; they never reach the visitor.
+  Adding a note does not invoke AI. `/digest` asks the root service for a digest now. The regular digest runs
+  Monday at 10:00 MSK. The owner reviews its Markdown export with an external coding agent; there is no automatic
+  AI review or automatic application of new notes. Legacy approved packages still use the minute service.
+  Details: `/root/smartdiag-fix/AGENTS.md`. Do not mark the entire export completed unless its work is complete.
+
+## Draft editing (14 November 2026)
+
+Edit opens a selective Telegram ForceReply in the same topic. Reply with the complete replacement text
+(up to 3500 characters), review the updated suggestion and press Send. A direct reply to a suggestion also
+edits it. Reply «Отмена» to cancel. Draft replies, including attachments and stale replies, are consumed
+before uploads, commands and visitor delivery. Slash-prefixed text routed through GenericCommand stays literal.
+
+Draft text, revision, status and editor prompt are stored atomically in
+`cache/telegram_suggest_draft_<hash>.json` (0600). Send/Edit callback revisions reject stale actions;
+operator, bot, group, topic and chat are checked. MySQL draft locks serialize editing and sending.
+A saved lh_msg mapping prevents duplicate sends, including an exception after save. In that case the operator
+sees a delivery warning and checks the chat. Older unedited suggestions work; missing versioned state fails
+closed and requires a new hint. Cache clearing can invalidate open edited drafts.
+
+SmartDiag REST104 handoffs accept a public `summary` argument. SmartiHandoff replaces
+`{smartdiag.handoff_summary}` inside the existing online support/sales and activation notification for bot121.
+Rendering does not call AI. Readiness resets before each model call and on the direct task-button path,
+so old summaries are not reused. Without a fresh summary the normal notification remains valid.
+The saved assistant message is delivered to visitor and operator. Working hours and queue policy are unchanged.
+
+`tests/TelegramDraftContractTest.php` runs isolated editing/sending/handoff interaction contracts with fake
+Telegram and DB transports. It makes no network calls or production writes.

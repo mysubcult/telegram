@@ -374,6 +374,11 @@ class GenericmessageCommand extends SystemCommand
                         );
                         $topicNamespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespace($topicContext['bot_id'], $topicContext['group_chat_id']);
 
+                        // Replies to a draft edit only the draft, before any upload or command processing.
+                        if (\LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleDraftReply($chat, $message, $tBot, (string)$message->getText())) {
+                            return Request::emptyResponse();
+                        }
+
                         if ($type === 'photo') {
                             $text = $this->appendCaptionToFileEmbed($message, $this->processPhoto($chat, $message, $tBot));
                         } elseif ($type === 'animation') {

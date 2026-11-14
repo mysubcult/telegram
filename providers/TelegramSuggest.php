@@ -26,6 +26,7 @@ class TelegramSuggest
     const CALLBACK_SEND = 'sgs';
     const CALLBACK_DISMISS = 'sgx';
     const CALLBACK_GENERATE = 'sgg';
+    const CALLBACK_EDIT = 'sge';
     const COMMAND = '!?';
     const NO_SUGGESTION = '💡 Подсказки нет';
     const REQUEST_FAILED = '⚠️ Не удалось получить подсказку: ИИ не ответил. Попробуйте «!?» ещё раз.';
@@ -101,11 +102,13 @@ class TelegramSuggest
         return trim($messageText);
     }
 
-    public static function buildKeyboard($chatId, $withSend = true)
+    public static function buildKeyboard($chatId, $withSend = true, $revision = 0)
     {
         $buttons = array();
         if ($withSend === true) {
-            $buttons[] = ['text' => '✅ Отправить', 'callback_data' => self::CALLBACK_SEND . '||' . (int)$chatId];
+            $suffix = $revision > 0 ? '||' . (int)$revision : '';
+            $buttons[] = ['text' => '✅ Отправить', 'callback_data' => self::CALLBACK_SEND . '||' . (int)$chatId . $suffix];
+            $buttons[] = ['text' => '✏️ Изменить', 'callback_data' => self::CALLBACK_EDIT . '||' . (int)$chatId . $suffix];
         }
         $buttons[] = ['text' => '✖️', 'callback_data' => self::CALLBACK_DISMISS . '||' . (int)$chatId];
         return new \Longman\TelegramBot\Entities\InlineKeyboard($buttons);
@@ -563,6 +566,10 @@ class TelegramSuggest
     // $suggestion with Send/Dismiss buttons, or $note (no suggestion) with Dismiss only
     public static function postSuggestion($chat, $msg, $suggestion, $note = '', $topicMsgId = 0)
     {
+        if (mb_strlen($suggestion) > 3500) {
+            $suggestion = '';
+            $note = '💡 Ответ слишком длинный. Запросите более короткую подсказку или ответьте сами.';
+        }
         foreach (self::getOperatorTopics($chat) as $tchat) {
 
             new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
@@ -584,6 +591,11 @@ class TelegramSuggest
 
             $result = \Longman\TelegramBot\Request::sendMessage($data);
 
+            if ($result->isOk() && $suggestion !== '') {
+                self::saveDraft($tchat->bot->id, $tchat->bot->group_chat_id, $result->getResult()->getMessageId(),
+                    self::initialDraft($chat->id, $tchat->tchat_id, self::HEADER . "\n\n" . $suggestion));
+            }
+
             if (!$result->isOk()) {
                 \erLhcoreClassLog::write('Suggestion sendMessage failed: ' . $result->getDescription(),
                     \ezcLog::SUCCESS_AUDIT,
@@ -597,6 +609,117 @@ class TelegramSuggest
                 );
             }
         }
+    }
+
+    public static function draftPath($botId, $groupId, $topicMsgId)
+    {
+        return 'cache/telegram_suggest_draft_' . hash('sha256', (int)$botId . ':' . $groupId . ':' . (int)$topicMsgId) . '.json';
+    }
+
+    public static function loadDraft($botId, $groupId, $topicMsgId)
+    {
+        $path = self::draftPath($botId, $groupId, $topicMsgId);
+        return is_file($path) ? (json_decode(file_get_contents($path), true) ?: null) : null;
+    }
+
+    public static function saveDraft($botId, $groupId, $topicMsgId, array $draft)
+    {
+        $path = self::draftPath($botId, $groupId, $topicMsgId);
+        $tmp = tempnam(dirname($path), 'sgdraft_');
+        if ($tmp === false || file_put_contents($tmp, json_encode($draft, JSON_UNESCAPED_UNICODE), LOCK_EX) === false || !rename($tmp, $path)) {
+            if ($tmp && is_file($tmp)) { unlink($tmp); }
+            throw new \RuntimeException('Не удалось сохранить черновик');
+        }
+        @chmod($path, 0600);
+    }
+
+    public static function initialDraft($chatId, $threadId, $text)
+    {
+        return ['chat_id' => (int)$chatId, 'thread_id' => (int)$threadId, 'text' => self::extractSuggestion($text),
+            'revision' => 0, 'status' => 'draft', 'updated' => time()];
+    }
+
+    public static function isBotDraftMessage($message, $tBot)
+    {
+        if (!is_object($message) || !is_object($message->getFrom()) || !$message->getFrom()->getIsBot() ||
+            strcasecmp((string)$message->getFrom()->getUsername(), ltrim((string)$tBot->bot_username, '@')) !== 0) {
+            return false;
+        }
+        return preg_match('/^(?:💡 Подсказка|✏️ Черновик №|✅ Отправлено|⏳ Отправляю|⚠️ Не отправлено|⚠️ Ответ сохранён)/u', (string)$message->getText()) === 1;
+    }
+
+    // Called before files/commands and normal operator delivery. Every draft reply is consumed, including stale ones.
+    public static function handleDraftReply($chat, $message, $tBot, $text)
+    {
+        $reply = $message->getReplyToMessage();
+        if (!self::isBotDraftMessage($reply, $tBot)) {
+            return false;
+        }
+        $groupId = $message->getChat()->getId();
+        $threadId = (int)$message->getMessageThreadId();
+        $draftId = (int)$reply->getMessageId();
+        $isPrompt = preg_match('/^✏️ Черновик №(\d+)/u', (string)$reply->getText(), $match) === 1;
+        if ($isPrompt) { $draftId = (int)$match[1]; }
+        $lock = 'suggest_' . $tBot->id . '_' . $groupId;
+        if (!TelegramLiveHelperChatOperator::acquireTelegramMessageLock($draftId, $lock)) {
+            return true; // Another operation owns this draft; never fall through to visitor delivery.
+        }
+        $notice = '';
+        $replyMarkup = json_decode(json_encode($reply->getReplyMarkup()), true);
+        $replySend = explode('||', $replyMarkup['inline_keyboard'][0][0]['callback_data'] ?? '');
+        $replyRevision = isset($replySend[0], $replySend[1]) && $replySend[0] === self::CALLBACK_SEND && (int)$replySend[1] === (int)$chat->id ? (int)($replySend[2] ?? 0) : -1;
+        try {
+            $draft = self::loadDraft($tBot->id, $groupId, $draftId);
+            if (!$draft && !$isPrompt && strpos((string)$reply->getText(), '💡 Подсказка') === 0) {
+                // A draft generated before editing was deployed has no server state yet.
+                $markup = json_decode(json_encode($reply->getReplyMarkup()), true);
+                $send = $markup['inline_keyboard'][0][0]['callback_data'] ?? '';
+                if ($send === self::CALLBACK_SEND . '||' . $chat->id) {
+                    $draft = self::initialDraft($chat->id, $threadId, $reply->getText());
+                }
+            }
+            if (!$draft || $draft['chat_id'] !== (int)$chat->id || $draft['thread_id'] !== $threadId ||
+                (!$isPrompt && $replyRevision !== (int)$draft['revision']) ||
+                ($isPrompt && ((int)($draft['edit_prompt_id'] ?? 0) !== (int)$reply->getMessageId() ||
+                    (int)($draft['editor_id'] ?? 0) !== (int)$message->getFrom()->getId() ||
+                    (int)($draft['edit_revision'] ?? -1) !== (int)$draft['revision']))) {
+                $notice = 'Это устаревший черновик. Нажмите «Изменить» под актуальной подсказкой. Текст клиенту не отправлен.';
+            } elseif ($draft['status'] !== 'draft' || self::isTopicMessageUsed($chat->id, $draftId)) {
+                $notice = 'Подсказка уже отправлена или скрыта. Правка клиенту не отправлена.';
+            } elseif ((int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
+                $notice = 'Чат уже закрыт. Правка клиенту не отправлена.';
+            } elseif (in_array(mb_strtolower(trim($text)), ['отмена', '/cancel'], true)) {
+                unset($draft['edit_prompt_id'], $draft['editor_id'], $draft['edit_revision']);
+                self::saveDraft($tBot->id, $groupId, $draftId, $draft);
+                $notice = 'Редактирование отменено. Черновик сохранён.';
+            } elseif (trim($text) === '' || mb_strlen($text) > 3500 || !in_array($message->getType(), ['text', 'message'], true)) {
+                $notice = 'Нужен текст целиком, до 3500 символов. Вложения в черновик не добавляются. Клиенту ничего не отправлено.';
+            } else {
+                $next = $draft;
+                $next['text'] = trim($text);
+                $next['revision']++;
+                $next['updated'] = time();
+                unset($next['edit_prompt_id'], $next['editor_id'], $next['edit_revision']);
+                // Persist first: an old queued Send must never publish stale text if Telegram editing fails.
+                self::saveDraft($tBot->id, $groupId, $draftId, $next);
+                $result = self::editSuggestion($groupId, $draftId, self::HEADER . "\n\n" . $next['text'], self::buildKeyboard($chat->id, true, $next['revision']));
+                if (!$result->isOk()) {
+                    self::saveDraft($tBot->id, $groupId, $draftId, $draft);
+                    $notice = 'Telegram не обновил подсказку. Правка клиенту не отправлена. Попробуйте ещё раз.';
+                } else {
+                    \Longman\TelegramBot\Request::deleteMessage(['chat_id' => $groupId, 'message_id' => $message->getMessageId()]);
+                    if ($isPrompt) { \Longman\TelegramBot\Request::deleteMessage(['chat_id' => $groupId, 'message_id' => $reply->getMessageId()]); }
+                }
+            }
+        } catch (\Throwable $e) {
+            $notice = 'Не удалось обновить черновик. Клиенту ничего не отправлено. Попробуйте ещё раз.';
+        } finally {
+            TelegramLiveHelperChatOperator::releaseTelegramMessageLock($draftId, $lock);
+        }
+        if ($notice !== '') {
+            \Longman\TelegramBot\Request::sendMessage(['chat_id' => $groupId, 'message_thread_id' => $threadId, 'text' => $notice]);
+        }
+        return true;
     }
 
     public static function isTopicMessageUsed($chatId, $topicMsgId)
@@ -617,75 +740,87 @@ class TelegramSuggest
         $message = $callbackQuery->getMessage();
         $groupChatId = $message->getChat()->getId();
         $topicMsgId = (int)$message->getMessageId();
-
-        // Any group member sees the buttons, only registered operators may use them
-        $operator = \erLhcoreClassModelTelegramOperator::findOne(array('filter' => array('bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId())));
-        if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) {
-            return 'Оператор не найден';
+        $operator = \erLhcoreClassModelTelegramOperator::findOne(['filter' => ['bot_id' => $tBot->id, 'confirmed' => 1, 'tuser_id' => $callbackQuery->getFrom()->getId()]]);
+        if (!($operator instanceof \erLhcoreClassModelTelegramOperator)) { return 'Оператор не найден'; }
+        $chat = \erLhcoreClassModelChat::fetch((int)$chatId);
+        if (!($chat instanceof \erLhcoreClassModelChat)) { return 'Чат не найден'; }
+        $matched = false;
+        foreach (self::getOperatorTopics($chat) as $topic) {
+            if ((int)$topic->bot_id === (int)$tBot->id && (string)$topic->bot->group_chat_id === (string)$groupChatId &&
+                (int)$topic->tchat_id === (int)$message->getMessageThreadId()) { $matched = true; break; }
         }
-
+        if (!$matched) { return 'Подсказка относится к другому чату'; }
         if ($action === self::CALLBACK_GENERATE) {
-            if (self::getSettings()['enabled'] === false) {
-                return 'Подсказки выключены';
-            }
+            if (self::getSettings()['enabled'] === false) { return 'Подсказки выключены'; }
             return self::enqueue((int)$chatId, (int)$msgId, true, $topicMsgId) ? 'Готовлю ответ…' : 'Фоновые задачи недоступны';
         }
-
-        if ($action === self::CALLBACK_DISMISS) {
-            $deleted = \Longman\TelegramBot\Request::deleteMessage(['chat_id' => $groupChatId, 'message_id' => $topicMsgId]);
-            if (!$deleted->isOk()) {
-                // Telegram does not let bots delete messages older than 48 hours
-                \Longman\TelegramBot\Request::editMessageReplyMarkup(['chat_id' => $groupChatId, 'message_id' => $topicMsgId, 'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([])]);
-            }
-            return 'Подсказка скрыта';
-        }
-
-        $chat = \erLhcoreClassModelChat::fetch((int)$chatId);
-        if (!($chat instanceof \erLhcoreClassModelChat) || (int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) {
-            \Longman\TelegramBot\Request::editMessageReplyMarkup(['chat_id' => $groupChatId, 'message_id' => $topicMsgId, 'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([])]);
-            return 'Чат уже закрыт';
-        }
-
-        $text = self::extractSuggestion($message->getText());
-        if ($text === '') {
-            return 'Пустая подсказка';
-        }
-
-        $topicContext = array('bot_id' => (int)$tBot->id, 'group_chat_id' => (string)$tBot->group_chat_id, 'thread_id' => (int)$message->getMessageThreadId());
-        $lockNamespace = 'suggest_' . $topicContext['bot_id'] . '_' . $topicContext['group_chat_id'];
+        if (!in_array($action, [self::CALLBACK_SEND, self::CALLBACK_EDIT, self::CALLBACK_DISMISS], true)) { return 'Кнопка устарела'; }
+        $topicContext = ['bot_id' => (int)$tBot->id, 'group_chat_id' => (string)$groupChatId, 'thread_id' => (int)$message->getMessageThreadId()];
+        $lockNamespace = 'suggest_' . $tBot->id . '_' . $groupChatId;
         $started = microtime(true);
-
-        // Double tap: the second press waits for the first one and then sees the message as used
-        TelegramLiveHelperChatOperator::acquireTelegramMessageLock($topicMsgId, $lockNamespace);
+        if (!TelegramLiveHelperChatOperator::acquireTelegramMessageLock($topicMsgId, $lockNamespace)) {
+            return 'Черновик занят. Повторите нажатие через несколько секунд';
+        }
         try {
-            if (self::isTopicMessageUsed($chat->id, $topicMsgId)) {
-                return 'Уже отправлено';
+            $draft = self::loadDraft($tBot->id, $groupChatId, $topicMsgId);
+            if (!$draft && ((int)$msgId > 0 || !self::isBotDraftMessage($message, $tBot) || strpos((string)$message->getText(), '💡 Подсказка') !== 0)) {
+                return 'Черновик недоступен. Запросите новую подсказку';
             }
-
-            // Sending runs every chat.web_add_msg_admin listener (delivery to the visitor's messenger, typing, webhooks)
-            // and may accept the chat first. Answer the press and drop the buttons right away, so the operator sees
-            // progress instead of a spinning button and cannot press twice.
+            if (!$draft) {
+                $draft = self::initialDraft($chat->id, $topicContext['thread_id'], $message->getText());
+                self::saveDraft($tBot->id, $groupChatId, $topicMsgId, $draft);
+            }
+            if ($draft['chat_id'] !== (int)$chat->id || $draft['thread_id'] !== $topicContext['thread_id']) { return 'Другой черновик'; }
+            if ($draft['status'] !== 'draft' || self::isTopicMessageUsed($chat->id, $topicMsgId)) { return 'Уже отправлено или скрыто'; }
+            if ($action === self::CALLBACK_DISMISS) {
+                $draft['status'] = 'dismissed';
+                self::saveDraft($tBot->id, $groupChatId, $topicMsgId, $draft);
+                $deleted = \Longman\TelegramBot\Request::deleteMessage(['chat_id' => $groupChatId, 'message_id' => $topicMsgId]);
+                if (!$deleted->isOk()) {
+                    \Longman\TelegramBot\Request::editMessageReplyMarkup(['chat_id' => $groupChatId, 'message_id' => $topicMsgId, 'reply_markup' => new \Longman\TelegramBot\Entities\InlineKeyboard([])]);
+                }
+                return 'Подсказка скрыта';
+            }
+            if ((int)$chat->status === \erLhcoreClassModelChat::STATUS_CLOSED_CHAT) { return 'Чат уже закрыт'; }
+            if ((int)$msgId !== (int)$draft['revision']) { return 'Черновик изменён. Нажмите кнопку под обновлённым текстом'; }
+            $text = $draft['text'];
+            if ($text === '') { return 'Пустая подсказка'; }
+            if ($action === self::CALLBACK_EDIT) {
+                $result = \Longman\TelegramBot\Request::sendMessage([
+                    'chat_id' => $groupChatId, 'message_thread_id' => $topicContext['thread_id'],
+                    'text' => '✏️ Черновик №' . $topicMsgId . "\n" . '<a href="tg://user?id=' . (int)$callbackQuery->getFrom()->getId() . '">Оператор</a>, ответьте на это сообщение новым текстом целиком. Клиент его не увидит. Затем нажмите «Отправить» под обновлённой подсказкой. Для отмены ответьте «Отмена».',
+                    'parse_mode' => 'HTML', 'reply_parameters' => ['message_id' => $topicMsgId],
+                    'reply_markup' => ['force_reply' => true, 'selective' => true, 'input_field_placeholder' => 'Новый текст ответа или Отмена'],
+                ]);
+                if (!$result->isOk()) { return 'Не удалось открыть редактирование. Попробуйте ещё раз'; }
+                $draft['edit_prompt_id'] = (int)$result->getResult()->getMessageId();
+                $draft['editor_id'] = (int)$callbackQuery->getFrom()->getId();
+                $draft['edit_revision'] = $draft['revision'];
+                self::saveDraft($tBot->id, $groupChatId, $topicMsgId, $draft);
+                return 'Ответьте новым текстом на запрос редактирования';
+            }
             \Longman\TelegramBot\Request::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId(), 'text' => 'Отправляю…']);
             self::editSuggestion($groupChatId, $topicMsgId, '⏳ Отправляю…' . "\n\n" . $text);
             $answered = microtime(true);
-
             try {
                 self::sendAsOperator($chat, $operator, $text, $topicMsgId, $topicContext);
+                $draft['status'] = 'sent';
+                self::saveDraft($tBot->id, $groupChatId, $topicMsgId, $draft);
             } catch (\Throwable $e) {
-                self::editSuggestion($groupChatId, $topicMsgId, '⚠️ Не отправлено, попробуйте ещё раз (' . $e->getMessage() . '):' . "\n\n" . $text, self::buildKeyboard($chat->id));
-                self::logTiming($chat->id, $started, $answered, microtime(true), 'error: ' . $e->getMessage());
+                // A delivery listener can fail after saving the LHC message. Never insert it a second time.
+                $saved = self::isTopicMessageUsed($chat->id, $topicMsgId);
+                $draft['status'] = $saved ? 'sent' : 'draft';
+                self::saveDraft($tBot->id, $groupChatId, $topicMsgId, $draft);
+                self::editSuggestion($groupChatId, $topicMsgId, ($saved ? '⚠️ Ответ сохранён в чате. Доставку нужно проверить.' : '⚠️ Не отправлено, попробуйте ещё раз:') . "\n\n" . $text, $saved ? null : self::buildKeyboard($chat->id, true, $draft['revision']));
+                self::logTiming($chat->id, $started, $answered, microtime(true), $saved ? 'delivery_error' : 'save_error');
                 return null;
             }
-            $sent = microtime(true);
+            self::editSuggestion($groupChatId, $topicMsgId, '✅ Отправлено (' . $operator->user->name_support . '):' . "\n\n" . $text);
+            self::logTiming($chat->id, $started, $answered, microtime(true), 'ok');
+            return null;
         } finally {
             TelegramLiveHelperChatOperator::releaseTelegramMessageLock($topicMsgId, $lockNamespace);
         }
-
-        self::editSuggestion($groupChatId, $topicMsgId, '✅ Отправлено (' . $operator->user->name_support . '):' . "\n\n" . $text);
-        self::logTiming($chat->id, $started, $answered, $sent, 'ok');
-
-        // The press is already answered above
-        return null;
     }
 
     public static function editSuggestion($groupChatId, $topicMsgId, $text, $keyboard = null)

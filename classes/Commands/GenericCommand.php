@@ -55,6 +55,14 @@ class GenericCommand extends SystemCommand
         $user_id = $message->getFrom()->getId();
         $command = $message->getCommand();
 
+        // Slash-prefixed draft text is editing input, before /pay, /hint or /fix routing.
+        $draftBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();
+        if (is_object($draftBot) && (int)$draftBot->bot_client === 1 && (int)$message->getMessageThreadId() > 0 &&
+            \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::isBotDraftMessage($message->getReplyToMessage(), $draftBot)) {
+            $genericMessage = $this->telegram->getCommandObject('genericmessage');
+            return $genericMessage !== null ? $genericMessage->setUpdate($this->getUpdate())->preExecute() : Request::emptyResponse();
+        }
+
         // "/fix what is wrong" — a correction of the AI assistant (providers/TelegramFix.php)
         if ((int)$message->getMessageThreadId() > 0 && strtolower((string)$command) === 'fix') {
             $tBot = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->getBot();

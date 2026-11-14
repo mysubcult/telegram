@@ -109,7 +109,7 @@ class CallbackqueryCommand extends SystemCommand
                 'show_alert'        => $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramFix::CALLBACK_EDIT,
             ]);
 
-        } else if ($paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_SEND || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_DISMISS || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_GENERATE) {
+        } else if ($paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_SEND || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_DISMISS || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_GENERATE || $paramsCallback[0] == \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::CALLBACK_EDIT) {
 
             $answer = \LiveHelperChatExtension\lhctelegram\providers\TelegramSuggest::handleCallback($callback_query, $tBot, $paramsCallback[0], $paramsCallback[1] ?? 0, $paramsCallback[2] ?? 0);
 

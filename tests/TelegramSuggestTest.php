@@ -82,10 +82,13 @@ class TelegramSuggestTest
     {
         $keyboard = json_decode(json_encode(TelegramSuggest::buildKeyboard(25535)), true)['inline_keyboard'];
         self::assert($keyboard[0][0]['callback_data'] === 'sgs||25535', 'Send callback data');
-        self::assert($keyboard[0][1]['callback_data'] === 'sgx||25535', 'Dismiss callback data');
+        self::assert($keyboard[0][2]['callback_data'] === 'sgx||25535', 'Dismiss callback data');
         foreach ($keyboard[0] as $button) {
             self::assert(strlen($button['callback_data']) <= 64, 'Telegram limits callback_data to 64 bytes');
         }
+        self::assert($keyboard[0][1]['callback_data'] === 'sge||25535', 'Edit callback data');
+        $versioned = json_decode(json_encode(TelegramSuggest::buildKeyboard(25535, true, 2)), true)['inline_keyboard'][0];
+        self::assert($versioned[0]['callback_data'] === 'sgs||25535||2' && $versioned[1]['callback_data'] === 'sge||25535||2', 'Versioned buttons');
         $noSend = json_decode(json_encode(TelegramSuggest::buildKeyboard(25535, false)), true)['inline_keyboard'];
         self::assert(count($noSend[0]) === 1 && $noSend[0][0]['callback_data'] === 'sgx||25535', 'Without send only dismiss stays');
 

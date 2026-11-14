@@ -75,3 +75,19 @@ old configuration and restarting resque; preserve unrelated later changes.
 Official documentation:
 - https://doc.livehelperchat.com/docs/bot/collect-custom-attribute
 - https://doc.livehelperchat.com/docs/bot/collecting-information-two-tries
+
+## Native configuration audit, 2026-11-14
+
+The original 66 bot-121 triggers were reviewed; unused trigger 2048 was removed.
+65 remain, with 141 checked route references and no missing targets. No outgoing
+cross-bot trigger callbacks, inherited bots or commands targeting other bots remain.
+All six bot-121 commands and its enabled webhooks target bot-121 triggers. Old
+Gemini numbers in copied action `_id` values are labels, not callbacks. Trigger
+2056 is reached through enabled webhooks; retain it. Retain consent-decline 2088
+for historical buttons. Old bot 120 has no department, command or enabled webhook
+bindings; historical bot records are referenced by closed chats.
+
+Custom Hint drafts, Telegram transport, public-summary sanitization and the
+mail-autoclose extension serve capabilities not replaced by this collection
+migration. Native mail auto-close lacks the existing answered-only and closing
+letter workflow. Do not remove these integrations as unused collectors.

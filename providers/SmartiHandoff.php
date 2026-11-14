@@ -33,7 +33,7 @@ class SmartiHandoff
             in_array($vars['ai_function_name'] ?? '', ['call_operator', 'call_sales', 'handoff_serial_operator'], true)) {
             $summary = self::cleanSummary($vars['ai_action_args']['summary'] ?? '');
         }
-        $block = $summary === '' ? '' : "\n\nКратко по обращению: " . $summary . "\nЕсли я что-то упустил, уточните здесь.";
+        $block = $summary === '' ? '' : "\n\nПодведу итог нашего разговора:\n\n" . $summary . "\n\nЕсли я что-то упустил, дополните меня здесь.";
         $params['msg'] = str_replace(self::MARKER, $block, $params['msg']);
     }
 }

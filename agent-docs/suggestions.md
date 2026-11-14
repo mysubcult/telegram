@@ -37,8 +37,10 @@
 
 Edit opens a selective Telegram ForceReply in the same topic. Reply with the complete replacement text
 (up to 3500 characters), review the updated suggestion and press Send. A direct reply to a suggestion also
-edits it. Reply «Отмена» to cancel. Draft replies, including attachments and stale replies, are consumed
-before uploads, commands and visitor delivery. Slash-prefixed text routed through GenericCommand stays literal.
+edits it. Reply «Отмена» to cancel. Unsent draft replies, including attachments and stale edit prompts, are
+consumed before uploads, commands and visitor delivery. Sent answers (including saved-delivery warnings)
+are ordinary quote targets. A saved LHC message mapping also overrides a stale draft header on a direct reply.
+Slash-prefixed draft text routed through GenericCommand stays literal.
 
 Draft text, revision, status and editor prompt are stored atomically in
 `cache/telegram_suggest_draft_<hash>.json` (0600). Send/Edit callback revisions reject stale actions;
@@ -52,6 +54,8 @@ SmartDiag REST104 handoffs accept a public `summary` argument. SmartiHandoff rep
 Rendering does not call AI. Readiness resets before each model call and on the direct task-button path,
 so old summaries are not reused. Without a fresh summary the normal notification remains valid.
 The saved assistant message is delivered to visitor and operator. Working hours and queue policy are unchanged.
+The public summary addresses the visitor from the assistant's perspective and distinguishes proposed steps
+from checks the visitor confirmed doing. The wrapper reads «Подведу итог нашего разговора».
 
 `tests/TelegramDraftContractTest.php` runs isolated editing/sending/handoff interaction contracts with fake
 Telegram and DB transports. It makes no network calls or production writes.

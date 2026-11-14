@@ -130,6 +130,17 @@ namespace {
         check(count(erLhcoreClassChat::$messages)===1,'Repeated Send no duplicate');
         check(editReply($prompt,'Поздняя правка') && count(erLhcoreClassChat::$messages)===1,'Late prompt is consumed');
 
+        $sent=draftMessage(100,1);$sent->v['Text']='✅ Отправлено (Тест): Инструкция';$sent->v['ReplyMarkup']=null;
+        $beforeCalls=count(R::$calls);
+        check(!editReply($sent,'По нашей инструкции сделали?'),'Reply to sent suggestion reaches normal quote path');
+        check(count(R::$calls)===$beforeCalls,'Sent answer reply does not show draft notices');
+        $sent->v['Text']='⚠️ Ответ сохранён в чате. Доставку нужно проверить.';
+        check(!editReply($sent,'Обычный ответ'),'Saved answer warning is a normal quote target');
+        check(!editReply(draftMessage(100,0),'Ответ на уже сохранённое'),'Saved LHC mapping overrides stale draft header');
+        $sent->v['Text']='✅ Отправлено (Тест): Инструкция';
+        unlink(S::draftPath(1,-1001,100));
+        check(!editReply($sent,'Ответ после очистки кэша'),'Sent answer remains a quote target without cache');
+
         seed(101); callback(draftMessage(101),S::CALLBACK_EDIT);
         $p=draftMessage(900);$p->v['Text']='✏️ Черновик №101';
         editReply($p,'Чужая правка',43);
@@ -171,7 +182,7 @@ namespace {
 
         $chat->gbot_id=121;$chat->chat_variables_array=['sd_summary_ready'=>'1','ai_function_name'=>'call_operator','ai_action_args'=>['summary'=>'Не скачиваются марки. Проверили VPN, ошибка осталась.']];
         $render='Передаю специалисту.'.H::MARKER;H::replaceSummary(['msg'=>&$render,'chat'=>$chat]);
-        check(strpos($render,'Кратко по обращению:')!==false && strpos($render,H::MARKER)===false,'Summary inside existing notification');
+        check(strpos($render,'Подведу итог нашего разговора:')!==false && strpos($render,H::MARKER)===false,'Summary inside existing notification');
         $vars=$chat->chat_variables_array;$vars['sd_summary_ready']='0';$chat->chat_variables_array=$vars;
         $render='Передаю специалисту.'.H::MARKER;H::replaceSummary(['msg'=>&$render,'chat'=>$chat]);
         check($render==='Передаю специалисту.','Stale summary omitted');

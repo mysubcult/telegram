@@ -645,10 +645,11 @@ class TelegramSuggest
             strcasecmp((string)$message->getFrom()->getUsername(), ltrim((string)$tBot->bot_username, '@')) !== 0) {
             return false;
         }
-        return preg_match('/^(?:💡 Подсказка|✏️ Черновик №|✅ Отправлено|⏳ Отправляю|⚠️ Не отправлено|⚠️ Ответ сохранён)/u', (string)$message->getText()) === 1;
+        // Sent answers are normal quote targets, even after the draft cache is cleared.
+        return preg_match('/^(?:💡 Подсказка|✏️ Черновик №|⏳ Отправляю|⚠️ Не отправлено)/u', (string)$message->getText()) === 1;
     }
 
-    // Called before files/commands and normal operator delivery. Every draft reply is consumed, including stale ones.
+    // Unsent drafts and edit prompts are consumed. Replies to saved answers use normal quote delivery.
     public static function handleDraftReply($chat, $message, $tBot, $text)
     {
         $reply = $message->getReplyToMessage();
@@ -670,6 +671,11 @@ class TelegramSuggest
         $replyRevision = isset($replySend[0], $replySend[1]) && $replySend[0] === self::CALLBACK_SEND && (int)$replySend[1] === (int)$chat->id ? (int)($replySend[2] ?? 0) : -1;
         try {
             $draft = self::loadDraft($tBot->id, $groupId, $draftId);
+            // Telegram may still expose an older draft header after the LHC message was saved.
+            // Edit prompts remain private; a direct reply to the saved answer is a normal reply.
+            if (!$isPrompt && self::isTopicMessageUsed($chat->id, $draftId)) {
+                return false;
+            }
             if (!$draft && !$isPrompt && strpos((string)$reply->getText(), '💡 Подсказка') === 0) {
                 // A draft generated before editing was deployed has no server state yet.
                 $markup = json_decode(json_encode($reply->getReplyMarkup()), true);

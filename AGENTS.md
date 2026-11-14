@@ -40,7 +40,6 @@ is served on the next request (opcache validates timestamps), there is no build 
 | `TelegramLiveHelperChatOperator::buildChatCard()` | First message of a new chat topic: department, visitor (name, @username, phone, messenger language from `lh_chat_incoming.payload` — shown only when not the site language; Telegram name links to `tg://user?id` without a username), location from the LHC MaxMind City mmdb (`formatChatLocation`: names in the default site access language, city only with accuracy radius < 200 km, then region) + IP, page. The mmdb is refreshed monthly by `/root/lhc-geoip-update.sh` (cron `/etc/cron.d/lhc-geoip`) |
 | `providers/TelegramApiClient.php` | Guzzle client for every Bot API call (installed in `bootstrap.php` `run()`): waits and repeats on `429` (retry_after ≤ 10 s, 2 retries), logs refused calls to `lh_audits` (category `telegram_api_error`, no token) |
 | `providers/TelegramSuggest.php` | Reply suggestions (see below) |
-| `providers/SmartiOrder.php` | Bot 121 purchase context before support/paid activation: native collection validator, format checks and handoff context. No order database verification; see `agent-docs/order-gate.md` |
 | `providers/TelegramTopicIcons.php` | Topic icon per department: `lhc_telegram_bot_dep.topic_icon` (custom emoji id from Telegram's free set `getForumTopicIconStickers` or `color:<value>`), chosen next to each department in «Edit bot departments»; icon set cached a day in `cache/telegram_topic_icons_<bot>.json`. Department names are not touched; `topic_label` — start of topic names instead of «<Department> ·» («TG · Nick #id …», the letter a coloured icon shows); preview in the form |
 | `providers/TelegramMailTopics.php` | E-mails in topics (bot option `mail_topics`): new mail conversation → topic (`lhc_telegram_chat.type = 2`, `chat_id` = conversation id), next e-mails posted into it, operator text in the topic → reply e-mail via `erLhcoreClassMailconvValidator::sendReply` |
 | `classes/Commands/GenericmessageCommand.php` | Text/media written by an operator in a topic → LHC message; `!` commands; `!?` interception |
@@ -58,6 +57,8 @@ Topic message mapping lives in `lh_msg.meta_msg`: `tg_topic_msg_contexts.<namesp
 there is not forwarded again (`isTopicMessageAlreadySent`) — that is how operator messages avoid echoing back.
 
 ## Working rules
+
+- Configure conversation business rules with native LHC actions first: collection, regex, files, retries and routing belong in bot triggers. Add a custom provider only when native actions lack a required capability, and document that gap.
 
 - LHC compiles module files (`settings.ini.php` → `modulecompile`): after editing anything under `modules/`
   (e.g. `callback.php`) run `sudo -u www-data php cron.php -s site_admin -c cron/util/clear_cache` in `lhc_web/`,
@@ -82,7 +83,7 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 | File | What |
 |---|---|
 | `agent-docs/suggestions.md` | Operator reply suggestions (`!?`), "/" topic menu, file captions, `/fix` requests |
-| `agent-docs/order-gate.md` | Purchase collection routes, screenshot/serial alternatives, native event hooks, checks and rollback |
+| `agent-docs/order-gate.md` | Native LHC purchase collection: regex/files, repeat limiter, routes and rollback; no custom PHP handler |
 | `agent-docs/upstream.md` | Webhook secret token, open upstream PRs, how to build PR branches and sync with upstream |
 
 Server map: `/root/AGENTS.md`. LHC core notes: `/var/www/html/livehelperchat/AGENTS.md`.

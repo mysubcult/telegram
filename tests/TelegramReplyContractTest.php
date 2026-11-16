@@ -358,7 +358,7 @@ expectTelegramContract($op::getTopicSenderPrefix($mockVisitorMsg, $mockChatNick)
 expectTelegramContract($op::formatTopicLine($mockBotMsg, $mockChatNick, 'ok') === '🤖 [Bot &lt;1&gt;]: <i>ok</i>', 'bot answer line keeps the italic format');
 expectTelegramContract($op::formatTopicLine($mockVisitorMsg, $mockChatNick, 'hi') === '👤 [Ivan &lt;&amp;&gt;]: hi', 'visitor line has the nick prefix');
 $opCode = file_get_contents(__DIR__ . '/../providers/TelegramLiveHelperChatOperator.php');
-expectTelegramContract(substr_count($opCode, 'self::forwardMessageToTopic(') === 3, 'visitor, following bot and button messages go through forwardMessageToTopic');
+expectTelegramContract(substr_count($opCode, 'self::forwardMessageToTopic(') === 1, 'visitor and callback events share ordered delivery');
 expectTelegramContract(strpos($opCode, 'exclude_bot_chats') === false, 'no reference to the non-existent exclude_bot_chats option');
 
 // getTopicReplyId contract tests

@@ -779,31 +779,34 @@ class TelegramLiveHelperChatOperator {
         $responses = array();
         $lastResponse = null;
 
-        foreach (self::getTelegramMessageChunks($data) as $chunkData) {
+        $chunks = self::getTelegramMessageChunks($data);
+        $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
+        $saved = $msg !== null ? ($msg->meta_msg_array['tg_topic_msg_contexts'][$namespace]['map'] ?? []) : [];
+        foreach ($chunks as $index => $chunkData) {
+            $sentPart = false;
+            foreach ($saved as $part) {
+                if (($part['kind'] ?? '') === 'text-part' && ($part['text'] ?? '') === $chunkData['text']) {
+                    $sentPart = true;
+                    break;
+                }
+            }
+            if ($sentPart) continue;
             $response = \Longman\TelegramBot\Request::sendMessage($chunkData);
-
             if (self::shouldRetryTelegramWithoutReply($response) && isset($chunkData['reply_parameters'])) {
                 unset($chunkData['reply_parameters']);
                 $response = \Longman\TelegramBot\Request::sendMessage($chunkData);
             }
-
             $responses[] = $response;
             $lastResponse = $response;
-
-            if (!$response->isOk()) {
-                break;
+            if (!$response->isOk()) break;
+            if ($msg !== null) {
+                self::saveTelegramTopicMessageIds($msg, $response, [
+                    'text' => $chunkData['text'] ?? '',
+                    'kind' => $index === count($chunks) - 1 ? 'text' : 'text-part'
+                ], $topicContext);
             }
         }
-
         self::$lastTelegramSendResponses = $responses;
-
-        if ($msg !== null) {
-            foreach ($responses as $response) {
-                if ($response->isOk()) {
-                    self::saveTelegramTopicMessageIds($msg, $response, array('text' => $data['text'] ?? '', 'kind' => 'text'), $topicContext);
-                }
-            }
-        }
 
         return $lastResponse !== null ? $lastResponse : \Longman\TelegramBot\Request::sendMessage($data);
     }
@@ -1270,6 +1273,16 @@ class TelegramLiveHelperChatOperator {
             }
         }
 
+        $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
+        $parts = $msg->meta_msg_array['tg_topic_msg_contexts'][$namespace]['map'] ?? [];
+        $partial = false;
+        $complete = false;
+        foreach ($parts as $part) {
+            $partial = $partial || ($part['kind'] ?? '') === 'text-part';
+            $complete = $complete || ($part['kind'] ?? '') === 'text';
+        }
+        if ($partial && !$complete) return false;
+
         $storedId = self::getStoredTopicMessageId($msg, null, $topicContext);
         return ($storedId !== null && (int)$storedId > 0);
     }
@@ -1288,7 +1301,7 @@ class TelegramLiveHelperChatOperator {
             $stmt->execute();
             return (int)$stmt->fetchColumn() === 1;
         } catch (\Throwable $e) {
-            return true;
+            return false;
         }
     }
 
@@ -1380,6 +1393,7 @@ class TelegramLiveHelperChatOperator {
                     return false;
                 }
                 self::logTopicError('sendMessage [' . $sendData->getErrorCode() . '] ' . $sendData->getDescription(), $chat->id);
+                return false;
             }
 
             return true;
@@ -1401,12 +1415,17 @@ class TelegramLiveHelperChatOperator {
                 return false;
             }
 
-            self::sendTelegramRequest('sendMessage', array(
+            $fallback = array(
                 'chat_id' => $tchat->bot->group_chat_id,
                 'message_thread_id' => $tchat->tchat_id,
                 'parse_mode' => 'HTML',
                 'text' => trim($prefix . "\n" . self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles))
-            ));
+            );
+            $response = self::sendTelegramMessageWithSplit($fallback, $msg, $tchat, $topicContext);
+            if (!$response->isOk()) {
+                self::logTopicError('File fallback failed: ' . $response->getDescription(), $chat->id);
+                return false;
+            }
         }
 
         return true;
@@ -1528,52 +1547,26 @@ class TelegramLiveHelperChatOperator {
     public static function messageAdded($params)
     {
         $chat = $params['chat'];
-        $db = \ezcDbInstance::get();
-
-        foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($params['chat']->online_user_id > 0 ? ($params['chat']->online_user_id * -1) : $params['chat']->id), 'type' => 1]]) as $tchat) {
-
-            if ((int)$tchat->chat_id !== (int)$params['chat']->id) {
-                $tchat->chat_id = (int)$params['chat']->id;
-                $tchat->utime = time();
-                $tchat->updateThis(['update' => ['chat_id', 'utime']]);
-            }
-
-
-            $db->beginTransaction();
-            $tchat->syncAndLock('`last_msg_id`');
-            $db->commit();
-
+        foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($chat->online_user_id > 0 ? $chat->online_user_id * -1 : $chat->id), 'type' => 1]]) as $tchat) {
             if ($tchat->bot->bot_client == 0) {
                 continue;
             }
-
-            $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-            $topicContext = self::getTelegramTopicContextForChat($tchat);
-            $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
-
-            if ($params['msg']->id > $tchat->last_msg_id) {
-
-                self::acquireTelegramMessageLock($params['msg']->id, $namespace);
-                try {
-                    if (self::isTopicMessageAlreadySent($params['msg'], $topicContext)) {
-                        $db->beginTransaction();
-                        $tchat->syncAndLock('`id`');
-                        if ($params['msg']->id > $tchat->last_msg_id) {
-                            $tchat->last_msg_id = $params['msg']->id;
-                            $tchat->updateThis(['update' => ['last_msg_id']]);
-                        }
-                        $db->commit();
-                        self::releaseTelegramMessageLock($params['msg']->id, $namespace);
-                    } else {
-                        $db->beginTransaction();
-                        $tchat->syncAndLock('`id`');
-                        $tchat->last_msg_id = $params['msg']->id;
-                        $tchat->updateThis(['update' => ['last_msg_id']]);
-                        $db->commit();
-
-                        // remove following if you want enable autoresponder messages for operators chat
-                        if (!isset($params['msg']->meta_msg_array['content']['auto_responder']) && !self::isRepeatedButtonPress($params['msg'])) {
-
+            // Serialize the entire topic, not individual message ids. A later event
+            // must drain earlier messages before it can advance the delivery cursor.
+            $namespace = 'topic_drain_' . $tchat->id;
+            if (!self::acquireTelegramMessageLock($tchat->id, $namespace, 30)) {
+                self::logTopicError('Topic delivery lock unavailable; cursor retained', $chat->id);
+                continue;
+            }
+            try {
+                $tchat->syncAndLock('`last_msg_id`');
+                if ((int)$tchat->chat_id !== (int)$chat->id) {
+                    $tchat->chat_id = (int)$chat->id;
+                    $tchat->utime = time();
+                    $tchat->updateThis(['update' => ['chat_id', 'utime']]);
+                }
+                $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
+                $topicContext = self::getTelegramTopicContextForChat($tchat);
                             if ($tchat->tchat_id == null || $tchat->tchat_id == 0) {
                                 $topicTitle = mb_substr(TelegramTopicIcons::topicPrefix($tchat->bot, $chat->department) . ' ' . $chat->nick . ' #' . $chat->id . ($chat->ip != '' ? ' | ' . $chat->ip : '') . ($chat->country_code != '' ? ' | ' . strtoupper($chat->country_code) : '') . ($chat->referrer != '' ? ' | ' . ltrim($chat->referrer, '/') : '') . (is_object($chat->online_user) && $chat->online_user->page_title != '' ? ' | ' . $chat->online_user->page_title : ''), 0, 128);
                                 $sendTopicData = \Longman\TelegramBot\Request::send('createForumTopic', TelegramTopicIcons::addIcon($tchat->bot, $chat->department, [
@@ -1595,119 +1588,40 @@ class TelegramLiveHelperChatOperator {
                                             'object_id' => $chat->id
                                         )
                                     );
-                                    self::releaseTelegramMessageLock($params['msg']->id, $namespace);
+
                                     return;
                                 }
                             }
 
-                            if (self::forwardMessageToTopic($tchat, $chat, $params['msg'], $topicContext) === false) {
-                                return;
-                            }
-                        }
-                    }
-                } finally {
-                    self::releaseTelegramMessageLock($params['msg']->id, $namespace);
-                }
 
-                // Forward any subsequent bot messages in this chat
-                $subsequentBotMessages = \erLhcoreClassModelmsg::getList(array(
-                    'filterin' => ['user_id' => [0, -2]],
-                    'filter' => array('chat_id' => $chat->id),
-                    'filtergt' => array('id' => $tchat->last_msg_id),
-                    'sort' => '`id` ASC'
-                ));
-
-                foreach ($subsequentBotMessages as $botMessage) {
-                    if ($botMessage->id <= $tchat->last_msg_id) {
-                        continue;
-                    }
-
-                    self::acquireTelegramMessageLock($botMessage->id, $namespace);
-                    try {
-                        if (self::isTopicMessageAlreadySent($botMessage, $topicContext)) {
-                            $db->beginTransaction();
-                            $tchat->syncAndLock('`id`');
-                            if ($botMessage->id > $tchat->last_msg_id) {
-                                $tchat->last_msg_id = $botMessage->id;
-                                $tchat->updateThis(['update' => ['last_msg_id']]);
-                            }
-                            $db->commit();
-                            self::releaseTelegramMessageLock($botMessage->id, $namespace);
-                            continue;
-                        }
-
-                        $db->beginTransaction();
-                        $tchat->syncAndLock('`id`');
-                        $tchat->last_msg_id = $botMessage->id;
-                        $tchat->updateThis(['update' => ['last_msg_id']]);
-                        $db->commit();
-
-                        if (isset($botMessage->meta_msg_array['content']['auto_responder'])) {
-                            self::releaseTelegramMessageLock($botMessage->id, $namespace);
-                            continue;
-                        }
-
-                        if (self::forwardMessageToTopic($tchat, $chat, $botMessage, $topicContext, self::getTopicMessageId($params['msg'], $chat->id, $topicContext)) === false) {
+                $messages = \erLhcoreClassModelmsg::getList([
+                    'filter' => ['chat_id' => $chat->id],
+                    'filtergt' => ['id' => $tchat->last_msg_id],
+                    'filternotin' => ['user_id' => [-1]],
+                    'sort' => '`id` ASC',
+                    'limit' => 1000
+                ]);
+                foreach ($messages as $msg) {
+                    $suppressed = isset($msg->meta_msg_array['content']['auto_responder']) || self::isRepeatedButtonPress($msg);
+                    if (!$suppressed && !self::isTopicMessageAlreadySent($msg, $topicContext)) {
+                        if (!self::forwardMessageToTopic($tchat, $chat, $msg, $topicContext)) {
+                            // A later event retries from here. Never mark a failed send as delivered.
                             return;
                         }
-                    } finally {
-                        self::releaseTelegramMessageLock($botMessage->id, $namespace);
                     }
+                    $tchat->last_msg_id = (int)$msg->id;
+                    $tchat->updateThis(['update' => ['last_msg_id']]);
                 }
+            } finally {
+                self::releaseTelegramMessageLock($tchat->id, $namespace);
             }
         }
     }
 
     public static function triggerClicked($params)
     {
-        $chat = $params['chat'];
-        $db = \ezcDbInstance::get();
-
-        foreach (\erLhcoreClassModelTelegramChat::getList(['filter' => ['chat_id_internal' => ($params['chat']->online_user_id > 0 ? ($params['chat']->online_user_id * -1) : $params['chat']->id), 'type' => 1]]) as $tchat) {
-
-            if ($tchat->bot->bot_client == 0) {
-                continue;
-            }
-
-            $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-            $topicContext = self::getTelegramTopicContextForChat($tchat);
-            $namespace = self::getTelegramTopicNamespaceFromContext($topicContext);
-
-            $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $chat->id), 'filtergt' => array('id' => $params['last_msg_id'])));
-            foreach ($botMessages as $botMessage) {
-
-                if ($botMessage->id <= $tchat->last_msg_id) {
-                    continue;
-                }
-
-                self::acquireTelegramMessageLock($botMessage->id, $namespace);
-                try {
-                    if (self::isTopicMessageAlreadySent($botMessage, $topicContext)) {
-                        $db->beginTransaction();
-                        $tchat->syncAndLock('`id`');
-                        if ($botMessage->id > $tchat->last_msg_id) {
-                            $tchat->last_msg_id = $botMessage->id;
-                            $tchat->updateThis(['update' => ['last_msg_id']]);
-                        }
-                        $db->commit();
-                        self::releaseTelegramMessageLock($botMessage->id, $namespace);
-                        continue;
-                    }
-
-                    $db->beginTransaction();
-                    $tchat->syncAndLock('`id`');
-                    $tchat->last_msg_id = $botMessage->id;
-                    $tchat->updateThis(['update' => ['last_msg_id']]);
-                    $db->commit();
-
-                    if (self::forwardMessageToTopic($tchat, $chat, $botMessage, $topicContext, self::getTopicMessageId($params['msg'], $chat->id, $topicContext)) === false) {
-                        return;
-                    }
-                } finally {
-                    self::releaseTelegramMessageLock($botMessage->id, $namespace);
-                }
-            }
-        }
+        // Callback and visitor events share one ordered, deduplicated delivery path.
+        self::messageAdded($params);
     }
 
     // ISO country code → flag emoji
@@ -1960,6 +1874,8 @@ class TelegramLiveHelperChatOperator {
                 }
                 $db->commit();
 
+                $namespace = 'topic_drain_' . $tChat->id;
+                if (!self::acquireTelegramMessageLock($tChat->id, $namespace, 30)) continue;
                 try {
                     $telegram = new \Longman\TelegramBot\Telegram($bot->bot->bot_api, $bot->bot->bot_username);
                     $topicContext = array(
@@ -2031,12 +1947,7 @@ class TelegramLiveHelperChatOperator {
                     // Collect all chat messages including bot
                     $initialTelegramFiles = array();
                     $initialAggregateMessages = array();
-                    $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $params['chat']->id)));
-                    if (!empty($botMessages)) {
-                        $tChat->last_msg_id = max(array_map(function ($botMessage) { return (int)$botMessage->id; }, $botMessages));
-                        $tChat->updateThis(['update' => ['last_msg_id']]);
-                    }
-
+                    $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $params['chat']->id), 'sort' => 'id ASC'));
                     foreach ($botMessages as $botMessage) {
                         $telegramFiles = self::getTelegramMessageFiles($botMessage);
                         $messageText = self::stripTelegramFileEmbeds($botMessage->msg);
@@ -2163,6 +2074,10 @@ class TelegramLiveHelperChatOperator {
                         }
                     }
 
+                    if ($sendData->isOk() && empty($failedEmbedCodes) && !empty($botMessages)) {
+                        $tChat->last_msg_id = max(array_map(fn($message) => (int)$message->id, $botMessages));
+                        $tChat->updateThis(['update' => ['last_msg_id']]);
+                    }
                 } catch (\Exception $e) {
                     \erLhcoreClassLog::write($e->getMessage(),
                         \ezcLog::SUCCESS_AUDIT,
@@ -2174,6 +2089,8 @@ class TelegramLiveHelperChatOperator {
                             'object_id' => $params['chat']->id
                         )
                     );
+                } finally {
+                    self::releaseTelegramMessageLock($tChat->id, $namespace);
                 }
             }
         }

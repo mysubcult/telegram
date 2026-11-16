@@ -88,3 +88,5 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 | `agent-docs/upstream.md` | Webhook secret token, open upstream PRs, how to build PR branches and sync with upstream |
 
 Server map: `/root/AGENTS.md`. LHC core notes: `/var/www/html/livehelperchat/AGENTS.md`.
+
+Topic channel labels are independent of business routing; see `agent-docs/topic-sources.md`.

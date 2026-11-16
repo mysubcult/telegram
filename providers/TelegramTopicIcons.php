@@ -48,6 +48,34 @@ class TelegramTopicIcons
         return self::$botDeps[$key];
     }
 
+    /** Keep the transport identity independent of business-department transfers.
+     * Configuration is opt-in per operator bot; mail and other bots keep their own labels.
+     */
+    public static function departmentForChat($bot, $chat, $sourceSettings = null)
+    {
+        $department = $chat->department;
+        if ($sourceSettings === null) {
+            $settings = \erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram')->settings;
+            $sourceSettings = $settings['topic_sources'] ?? array();
+        }
+        $config = $sourceSettings[(int)$bot->id] ?? array();
+        if (!in_array((int)$chat->dep_id, $config['departments'] ?? array(), true)) {
+            return $department;
+        }
+        $incomingChat = $chat->incoming_chat;
+        $incoming = is_object($incomingChat) ? $incomingChat->incoming : null;
+        $scope = is_object($incoming) ? (string)$incoming->scope : '';
+        // Unknown integrations must retain their label rather than be called a website.
+        $sourceId = (int)($config['scopes'][$scope] ?? 0);
+        if ($sourceId > 0 && self::getBotDep($bot, $sourceId) !== null) {
+            $source = \erLhcoreClassModelDepartament::fetch($sourceId);
+            if (is_object($source)) {
+                return $source;
+            }
+        }
+        return $department;
+    }
+
     // Start of a topic name: "<label> ·" from the department setting, else "<Department> ·"
     public static function topicPrefix($bot, $department)
     {

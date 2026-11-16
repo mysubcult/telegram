@@ -1,6 +1,10 @@
 <?php
 
 return array(
+    // Optional: bot id => departments eligible for channel-based topic labels.
+    // scopes maps native incoming scope (empty = web widget) to a bot department.
+    'topic_sources' => array(),
+
     'disable_op_flow' => false,
     'disable_leads' => false,
     'convert_ogg' => false,

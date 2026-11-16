@@ -30,7 +30,7 @@ class SmartiHandoff
         $vars = $chat->chat_variables_array;
         $summary = '';
         if ((int)$chat->gbot_id === 121 && ($vars['sd_summary_ready'] ?? '') === '1' &&
-            in_array($vars['ai_function_name'] ?? '', ['call_operator', 'call_sales', 'handoff_serial_operator'], true)) {
+            in_array($vars['ai_function_name'] ?? '', ['call_operator', 'call_sales', 'call_service', 'handoff_serial_operator'], true)) {
             $summary = self::cleanSummary($vars['ai_action_args']['summary'] ?? '');
         }
         $block = $summary === '' ? '' : "\n\nПодведу итог нашего разговора:\n\n" . $summary . "\n\nЕсли я что-то упустил, дополните меня здесь.";

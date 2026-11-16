@@ -83,6 +83,7 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 | File | What |
 |---|---|
 | `agent-docs/suggestions.md` | Operator reply suggestions (`!?`), "/" topic menu, file captions, `/fix` requests |
+| `agent-docs/business-routing.md` | Incoming channels, native business handoffs, operator aliases and closed-chat warnings |
 | `agent-docs/order-gate.md` | Native LHC purchase collection: regex/files, repeat limiter, routes and rollback; no custom PHP handler |
 | `agent-docs/upstream.md` | Webhook secret token, open upstream PRs, how to build PR branches and sync with upstream |
 

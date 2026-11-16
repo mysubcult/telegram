@@ -624,6 +624,7 @@ class GenericmessageCommand extends SystemCommand
                             $msg->user_id = $messageUserId;
                             $msg->time = time();
                             $msg->name_support = $operator->user->name_support;
+                            \LiveHelperChat\Models\Departments\UserDepAlias::getAlias(['scope' => 'msg', 'msg' => &$msg, 'chat' => &$chat, 'user_id' => $messageUserId]);
 
                             \erLhcoreClassChat::getSession()->save($msg);
 

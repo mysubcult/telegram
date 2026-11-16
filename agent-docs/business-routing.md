@@ -17,8 +17,8 @@ support/service Mon–Fri 10–19. Server uses Samara (+1 hour). Manual Telegram
 acceptance and topic takeover have no hours prerequisite. The launcher
 reflects published hours only, not active admin sessions.
 
-`call_service` is declared in both REST 104 request methods. Native event
-2191 checks service_work_hours and invokes 2192/2193. Online -> department 15
+`call_service` is declared in both REST 104 request methods. Native event `call_service` invokes entry trigger
+2191, which checks service_work_hours and invokes 2192/2193. Online -> department 15
 and user 1; offline -> information only. Consent and software support purchase
 checks retained. Service requests need no purchase gate before a human can
 clarify a repair. `SmartiHandoff` accepts sanitized service summary using the

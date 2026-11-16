@@ -785,7 +785,7 @@ class TelegramLiveHelperChatOperator {
         foreach ($chunks as $index => $chunkData) {
             $sentPart = false;
             foreach ($saved as $part) {
-                if (($part['kind'] ?? '') === 'text-part' && ($part['text'] ?? '') === $chunkData['text']) {
+                if (($part['kind'] ?? '') === 'text-part' && isset($part['part_index']) && (int)$part['part_index'] === $index && ($part['text'] ?? '') === $chunkData['text']) {
                     $sentPart = true;
                     break;
                 }
@@ -802,7 +802,8 @@ class TelegramLiveHelperChatOperator {
             if ($msg !== null) {
                 self::saveTelegramTopicMessageIds($msg, $response, [
                     'text' => $chunkData['text'] ?? '',
-                    'kind' => $index === count($chunks) - 1 ? 'text' : 'text-part'
+                    'kind' => $index === count($chunks) - 1 ? 'text' : 'text-part',
+                    'part_index' => $index
                 ], $topicContext);
             }
         }
@@ -1081,7 +1082,7 @@ class TelegramLiveHelperChatOperator {
 
             $topicMap = isset($meta['tg_topic_msg_map']) && is_array($meta['tg_topic_msg_map']) ? $meta['tg_topic_msg_map'] : array();
             $entry = array();
-            foreach (array('text', 'caption', 'embed', 'kind') as $key) {
+            foreach (array('text', 'caption', 'embed', 'kind', 'part_index') as $key) {
                 if (isset($messageData[$key]) && is_scalar($messageData[$key])) {
                     $entry[$key] = (string)$messageData[$key];
                 }

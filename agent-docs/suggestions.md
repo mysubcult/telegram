@@ -22,6 +22,9 @@
 - REST 105 uses the smarti-ai Cloudflare worker (`/root/smarti-ai`) with DeepSeek thinking mode. Its body must end
   with a `user` turn, otherwise DeepSeek rejects the request («reasoning_content must be passed back»).
 
+Visitor context (name, page and channel) is inherited from REST 104 using native LHC placeholders;
+see [visitor-context.md](visitor-context.md) for fields, interpretation, validation and rollback.
+
 ## Topic commands, file captions, /fix
 
 - `/name` in a topic = `!name` (`classes/Commands/GenericCommand.php`); `/hint` = `!?`. The "/" menu lists the bot option "Commands in the "/" menu of the group" (`lhc_telegram_bot.topic_commands`), `providers/TelegramTopicCommands.php` re-sends it on change. Do not use LHC core flags (e.g. "Enabled for display") for Telegram behaviour.

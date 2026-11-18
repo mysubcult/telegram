@@ -363,11 +363,15 @@ class erLhcoreClassExtensionLhctelegram
             $forumTopicCreated = (bool)self::getTelegramEntityProperty($replyObject, 'forum_topic_created');
         }
 
+        $replyThread = (int)($replyRaw['message_thread_id'] ?? 0);
+        $sameTopic = $replyThread === 0 || $replyThread === $threadId;
+        $sameChat = !isset($raw['chat']['id'], $replyRaw['chat']['id']) || (string)$raw['chat']['id'] === (string)$replyRaw['chat']['id'];
+
         return array(
             'message_id' => $messageId,
             'thread_id' => $threadId,
             'reply_message_id' => $replyMessageId,
-            'is_explicit_reply' => $replyMessageId > 0 && !$forumTopicCreated,
+            'is_explicit_reply' => $replyMessageId > 0 && !$forumTopicCreated && $sameTopic && $sameChat,
             'quote_text' => $quoteText
         );
     }

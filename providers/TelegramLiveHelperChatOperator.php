@@ -11,6 +11,8 @@ class TelegramLiveHelperChatOperator {
 
     public static function registerListeners($dispatcher)
     {
+        $dispatcher->listen('chat.rest_api_before_request', TelegramReplyHistory::class . '::prepareRestReply');
+        $dispatcher->listen('chat.validate_external_reply', TelegramReplyHistory::class . '::validateExternalReply');
         $dispatcher->listen('chat.delete', self::class . '::deleteChat');
         $dispatcher->listen('chat.close', self::class . '::closeChat');
         $dispatcher->listen('chat.chat_started', self::class . '::chatStarted');
@@ -1116,6 +1118,9 @@ class TelegramLiveHelperChatOperator {
                         'map' => array()
                     );
                 }
+                if (!empty($topicContext['thread_id'])) {
+                    $entry['thread_id'] = (int)$topicContext['thread_id'];
+                }
                 $context = &$meta['tg_topic_msg_contexts'][$namespace];
                 $contextIds = isset($context['ids']) && is_array($context['ids']) ? array_map('intval', $context['ids']) : array();
                 $contextIds[] = (int)$topicMsgId;
@@ -1176,10 +1181,14 @@ class TelegramLiveHelperChatOperator {
             return array();
         }
 
-        return array(
+        $context = [
             'bot_id' => (int)$tchat->bot_id,
             'group_chat_id' => (string)$tchat->bot->group_chat_id
-        );
+        ];
+        if (!empty($tchat->tchat_id)) {
+            $context['thread_id'] = (int)$tchat->tchat_id;
+        }
+        return $context;
     }
 
     public static function getTelegramTopicNamespaceFromContext($topicContext)
@@ -1223,6 +1232,10 @@ class TelegramLiveHelperChatOperator {
             if (!empty($contextIds)) {
                 return (int)end($contextIds);
             }
+        }
+
+        if (!empty($topicContext['bot_id']) && !empty($meta['tg_topic_msg_contexts'])) {
+            return null;
         }
 
         $knownIds = array();
@@ -1422,6 +1435,9 @@ class TelegramLiveHelperChatOperator {
                 'parse_mode' => 'HTML',
                 'text' => trim($prefix . "\n" . self::formatFailedTelegramFiles($failedEmbedCodes, $telegramFiles))
             );
+            if ((int)$replyTopicMsgId > 0) {
+                $fallback['reply_parameters'] = ['message_id' => (int)$replyTopicMsgId];
+            }
             $response = self::sendTelegramMessageWithSplit($fallback, $msg, $tchat, $topicContext);
             if (!$response->isOk()) {
                 self::logTopicError('File fallback failed: ' . $response->getDescription(), $chat->id);
@@ -1481,14 +1497,21 @@ class TelegramLiveHelperChatOperator {
 
         if (isset($meta['content']['reply_to']['iwh_msg_id']) && $meta['content']['reply_to']['iwh_msg_id'] != '') {
             $iwhId = (string)$meta['content']['reply_to']['iwh_msg_id'];
+            $quoted = \ezcDbInstance::get()->quote($iwhId);
             $targetMsg = \erLhcoreClassModelmsg::findOne([
                 'filter' => ['chat_id' => $chatId],
-                'customfilter' => ["`meta_msg` != '' AND JSON_VALID(`meta_msg`) AND (JSON_UNQUOTE(JSON_EXTRACT(meta_msg,'$.iwh_msg_id')) = " . \ezcDbInstance::get()->quote($iwhId) . " OR JSON_EXTRACT(meta_msg,'$.iwh_msg_id') = " . (is_numeric($iwhId) ? (int)$iwhId : \ezcDbInstance::get()->quote($iwhId)) . ")"]
+                'customfilter' => ["JSON_VALID(meta_msg) AND BINARY JSON_UNQUOTE(JSON_EXTRACT(meta_msg,'$.iwh_msg_id')) = $quoted"]
             ]);
             if ($targetMsg instanceof \erLhcoreClassModelmsg && (int)$targetMsg->chat_id === (int)$chatId) {
                 $resolvedId = self::getStoredTopicMessageId($targetMsg, null, $topicContext);
                 if ($resolvedId !== null) {
                     return $resolvedId;
+                }
+            }
+            if (!empty($topicContext['thread_id'])) {
+                $target = TelegramReplyHistory::find($chatId, $topicContext, $iwhId);
+                if ($target !== null) {
+                    return $target['topic_id'];
                 }
             }
         }
@@ -1567,7 +1590,6 @@ class TelegramLiveHelperChatOperator {
                     $tchat->updateThis(['update' => ['chat_id', 'utime']]);
                 }
                 $telegram = new \Longman\TelegramBot\Telegram($tchat->bot->bot_api, $tchat->bot->bot_username);
-                $topicContext = self::getTelegramTopicContextForChat($tchat);
                             if ($tchat->tchat_id == null || $tchat->tchat_id == 0) {
                                 $topicTitle = mb_substr(TelegramTopicIcons::topicPrefix($tchat->bot, TelegramTopicIcons::departmentForChat($tchat->bot, $chat)) . ' ' . $chat->nick . ' #' . $chat->id . ($chat->ip != '' ? ' | ' . $chat->ip : '') . ($chat->country_code != '' ? ' | ' . strtoupper($chat->country_code) : '') . ($chat->referrer != '' ? ' | ' . ltrim($chat->referrer, '/') : '') . (is_object($chat->online_user) && $chat->online_user->page_title != '' ? ' | ' . $chat->online_user->page_title : ''), 0, 128);
                                 $sendTopicData = \Longman\TelegramBot\Request::send('createForumTopic', TelegramTopicIcons::addIcon($tchat->bot, TelegramTopicIcons::departmentForChat($tchat->bot, $chat), [
@@ -1595,6 +1617,7 @@ class TelegramLiveHelperChatOperator {
                             }
 
 
+                $topicContext = self::getTelegramTopicContextForChat($tchat);
                 $messages = \erLhcoreClassModelmsg::getList([
                     'filter' => ['chat_id' => $chat->id],
                     'filtergt' => ['id' => $tchat->last_msg_id],
@@ -1602,21 +1625,29 @@ class TelegramLiveHelperChatOperator {
                     'sort' => '`id` ASC',
                     'limit' => 1000
                 ]);
-                foreach ($messages as $msg) {
-                    $suppressed = isset($msg->meta_msg_array['content']['auto_responder']) || self::isRepeatedButtonPress($msg);
-                    if (!$suppressed && !self::isTopicMessageAlreadySent($msg, $topicContext)) {
-                        if (!self::forwardMessageToTopic($tchat, $chat, $msg, $topicContext)) {
-                            // A later event retries from here. Never mark a failed send as delivered.
-                            return;
-                        }
-                    }
-                    $tchat->last_msg_id = (int)$msg->id;
-                    $tchat->updateThis(['update' => ['last_msg_id']]);
+                if (!self::forwardPendingMessages($messages, $tchat, $chat, $topicContext)) {
+                    return;
                 }
             } finally {
                 self::releaseTelegramMessageLock($tchat->id, $namespace);
             }
         }
+    }
+
+    private static function forwardPendingMessages($messages, $tchat, $chat, $topicContext)
+    {
+        foreach ($messages as $msg) {
+            $suppressed = isset($msg->meta_msg_array['content']['auto_responder']) || self::isRepeatedButtonPress($msg);
+            if (!$suppressed && !self::isTopicMessageAlreadySent($msg, $topicContext)) {
+                if (!self::forwardMessageToTopic($tchat, $chat, $msg, $topicContext)) {
+                    // A later event retries from here. Never mark a failed send as delivered.
+                    return false;
+                }
+            }
+            $tchat->last_msg_id = (int)$msg->id;
+            $tchat->updateThis(['update' => ['last_msg_id']]);
+        }
+        return true;
     }
 
     public static function triggerClicked($params)
@@ -1879,11 +1910,6 @@ class TelegramLiveHelperChatOperator {
                 if (!self::acquireTelegramMessageLock($tChat->id, $namespace, 30)) continue;
                 try {
                     $telegram = new \Longman\TelegramBot\Telegram($bot->bot->bot_api, $bot->bot->bot_username);
-                    $topicContext = array(
-                        'bot_id' => (int)$bot->bot->id,
-                        'group_chat_id' => (string)$bot->bot->group_chat_id
-                    );
-
                     $topicTitle = mb_substr(TelegramTopicIcons::topicPrefix($bot->bot, TelegramTopicIcons::departmentForChat($bot->bot, $params['chat'])) . ' ' . $params['chat']->nick . ' #' . $params['chat']->id . ($params['chat']->ip != '' ? ' | ' . $params['chat']->ip : '') . ($params['chat']->country_code != '' ? ' | ' . strtoupper($params['chat']->country_code) : '') . ($params['chat']->referrer != '' ? ' | ' . ltrim($params['chat']->referrer, '/') : '') . (is_object($params['chat']->online_user) && $params['chat']->online_user->page_title != '' ? ' | ' . $params['chat']->online_user->page_title : ''), 0, 128);
 
                     if ($tChat->tchat_id == null || $tChat->tchat_id == 0) {
@@ -1910,6 +1936,7 @@ class TelegramLiveHelperChatOperator {
                         }
                     }
 
+                    $topicContext = self::getTelegramTopicContextForChat($tChat);
                     $previousChatMessages = '';
 
                     if ($bot->bot->delete_on_close == 1 && $params['chat']->online_user_id > 0 && is_object($params['chat']->online_user) && is_object($params['chat']->online_user->previous_chat)) {
@@ -1949,7 +1976,17 @@ class TelegramLiveHelperChatOperator {
                     $initialTelegramFiles = array();
                     $initialAggregateMessages = array();
                     $botMessages = \erLhcoreClassModelmsg::getList(array('filterin' => ['user_id' => [0, -2]], 'filter' => array('chat_id' => $params['chat']->id), 'sort' => 'id ASC'));
+                    // A card cannot carry the individual reply links of several messages.
+                    // Keep their order and source IDs by posting them separately when one is a reply.
+                    $separateMessages = false;
                     foreach ($botMessages as $botMessage) {
+                        $meta = $botMessage->meta_msg_array;
+                        if (!empty($meta['content']['reply_to']) || (count($botMessages) > 1 && !empty($meta['iwh_msg_id']))) {
+                            $separateMessages = true;
+                            break;
+                        }
+                    }
+                    foreach ($separateMessages ? [] : $botMessages as $botMessage) {
                         $telegramFiles = self::getTelegramMessageFiles($botMessage);
                         $messageText = self::stripTelegramFileEmbeds($botMessage->msg);
 
@@ -1987,7 +2024,7 @@ class TelegramLiveHelperChatOperator {
                         foreach ($initialAggregateMessages as $aggregateMessage) {
                             self::saveTelegramTopicMessageIds($aggregateMessage['msg'], $sendData, array('text' => $aggregateMessage['text'], 'kind' => 'aggregate'), $topicContext);
                         }
-                        if (empty($initialAggregateMessages)) {
+                        if (!$separateMessages && empty($initialAggregateMessages)) {
                             $firstMsg = \erLhcoreClassModelmsg::findOne(['filter' => ['chat_id' => $params['chat']->id], 'sort' => 'id ASC']);
                             if ($firstMsg instanceof \erLhcoreClassModelmsg) {
                                 self::saveTelegramTopicMessageIds($firstMsg, $sendData, array('text' => $data['text'], 'kind' => 'aggregate'), $topicContext);
@@ -2010,6 +2047,7 @@ class TelegramLiveHelperChatOperator {
                             }
                         }
 
+                        $topicContext = self::getTelegramTopicContextForChat($tChat);
                         $data['message_thread_id'] = $tChat->tchat_id;
                         $sendData = self::sendTelegramRequest('sendMessage', $data);
 
@@ -2018,7 +2056,7 @@ class TelegramLiveHelperChatOperator {
                             foreach ($initialAggregateMessages as $aggregateMessage) {
                                 self::saveTelegramTopicMessageIds($aggregateMessage['msg'], $sendData, array('text' => $aggregateMessage['text'], 'kind' => 'aggregate'), $topicContext);
                             }
-                            if (empty($initialAggregateMessages)) {
+                            if (!$separateMessages && empty($initialAggregateMessages)) {
                                 $firstMsg = \erLhcoreClassModelmsg::findOne(['filter' => ['chat_id' => $params['chat']->id], 'sort' => 'id ASC']);
                                 if ($firstMsg instanceof \erLhcoreClassModelmsg) {
                                     self::saveTelegramTopicMessageIds($firstMsg, $sendData, array('text' => $data['text'], 'kind' => 'aggregate'), $topicContext);
@@ -2036,6 +2074,13 @@ class TelegramLiveHelperChatOperator {
                                 )
                             );
                         }
+                    }
+
+                    if ($separateMessages && $sendData->isOk()) {
+                        if (!self::forwardPendingMessages($botMessages, $tChat, $params['chat'], $topicContext)) {
+                            return;
+                        }
+                        continue;
                     }
 
                     if (!empty($initialTelegramFiles)) {

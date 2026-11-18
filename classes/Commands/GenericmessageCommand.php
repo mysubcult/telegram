@@ -370,7 +370,8 @@ class GenericmessageCommand extends SystemCommand
                     if ($chat instanceof \erLhcoreClassModelChat) {
                         $topicContext = array(
                             'bot_id' => (int)$tBot->id,
-                            'group_chat_id' => (string)$chat_id
+                            'group_chat_id' => (string)$chat_id,
+                            'thread_id' => (int)$tchat->tchat_id
                         );
                         $topicNamespace = \erLhcoreClassExtensionLhctelegram::getTelegramTopicNamespace($topicContext['bot_id'], $topicContext['group_chat_id']);
 
@@ -539,6 +540,7 @@ class GenericmessageCommand extends SystemCommand
                                         'map' => array(
                                             (string)$telegramMessageId => array(
                                                 'text' => \erLhcoreClassExtensionLhctelegram::stripTelegramFileEmbedsText($text),
+                                                'thread_id' => $topicContext['thread_id'],
                                                 'kind' => 'text'
                                             )
                                         )
@@ -561,12 +563,18 @@ class GenericmessageCommand extends SystemCommand
                                     $replyMsg = \erLhcoreClassModelmsg::findOne([
                                         'filter' => ['chat_id' => $chat->id],
                                         'customfilter' => [
-                                            'meta_msg != \'\' AND JSON_VALID(meta_msg) AND (JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId . ' OR JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\'))'
+                                            'meta_msg != \'\' AND JSON_VALID(meta_msg) AND JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_contexts\') IS NULL AND (JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_id\') = ' . $replyTopicMsgId . ' OR JSON_CONTAINS(JSON_EXTRACT(meta_msg, \'$.tg_topic_msg_ids\'), \'[' . $replyTopicMsgId . ']\'))'
                                         ]
                                     ]);
                                 }
 
-                                if ($replyMsg instanceof \erLhcoreClassModelmsg) {
+                                $history = null;
+                                if (!($replyMsg instanceof \erLhcoreClassModelmsg)) {
+                                    $history = \LiveHelperChatExtension\lhctelegram\providers\TelegramReplyHistory::find($chat->id, $topicContext, null, $replyTopicMsgId);
+                                    $replyMsg = $history['msg'] ?? null;
+                                }
+
+                                if ($replyMsg) {
                                     $replyMsgMeta = is_array($replyMsg->meta_msg_array) ? $replyMsg->meta_msg_array : array();
                                     if (empty($replyMsgMeta) && isset($replyMsg->meta_msg) && is_string($replyMsg->meta_msg)) {
                                         $decodedReplyMeta = json_decode($replyMsg->meta_msg, true);
@@ -574,7 +582,7 @@ class GenericmessageCommand extends SystemCommand
                                             $replyMsgMeta = $decodedReplyMeta;
                                         }
                                     }
-                                    $replyExternalId = trim((string)($replyMsgMeta['iwh_msg_id'] ?? ''));
+                                    $replyExternalId = $history['external_id'] ?? trim((string)($replyMsgMeta['iwh_msg_id'] ?? ''));
                                     $replyReference = \erLhcoreClassExtensionLhctelegram::buildTelegramReplyReference(
                                         $replyMsg->id,
                                         $replyTopicMsgId,
@@ -586,6 +594,9 @@ class GenericmessageCommand extends SystemCommand
                                     // The REST core only consumes iwh_msg_id from its
                                     // numeric quote marker; this metadata is consumed
                                     // by the Telegram extension for direct topic replies.
+                                    if ($history !== null) {
+                                        $replyReference['history_topic'] = $topicContext;
+                                    }
                                     $metaMsg['content']['reply_to'] = $replyReference;
                                     $quoteText = trim((string)($replyData['quote_text'] ?? ''));
                                     if ($quoteText === '') {
@@ -601,12 +612,14 @@ class GenericmessageCommand extends SystemCommand
                                     }
                                     $quoteText = \erLhcoreClassExtensionLhctelegram::normalizeTelegramQuoteText($quoteText);
                                     $replyNick = $replyMsg->name_support != '' ? $replyMsg->name_support : $chat->nick;
-                                    $msgText = \erLhcoreClassExtensionLhctelegram::formatTelegramQuotedText(
-                                        $msgText,
-                                        $replyMsg->id,
-                                        $quoteText,
-                                        $replyExternalId
-                                    );
+                                    if ($history === null) {
+                                        $msgText = \erLhcoreClassExtensionLhctelegram::formatTelegramQuotedText(
+                                            $msgText,
+                                            $replyMsg->id,
+                                            $quoteText,
+                                            $replyExternalId
+                                        );
+                                    }
                                     $metaMsg['content']['quote'] = [
                                         'id' => $replyMsg->id,
                                         'text' => $quoteText,

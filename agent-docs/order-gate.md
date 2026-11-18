@@ -10,6 +10,7 @@ collectors per marketplace. This replaces the 2026-11-14 source-menu flow.
 |---|---|
 | 2045, 2046 | Consent, purchase readiness, support hours and handoff |
 | 2082, 2185, 2184 | Existing activation/free-test routing, paid-purchase guard and queue |
+| 2035 → 2194 → 2183 | While consented purchase intake is pending, a visitor message containing only 12 digits is stored directly and resumes the saved route |
 | 2176 | One prompt accepting order number, serial or purchase screenshot; Return on the same message |
 | 2177–2182 | Historical callback compatibility: return to 2176 while intake is pending |
 | 2068 → 2183 | Dispatch `submit_purchase_details` before normal AI action/summary reset |
@@ -26,9 +27,12 @@ path. The model must read only visible information, reject random text and
 unreadable images, clarify another seller, and never invent or reuse an example
 number. No order-format examples are shown in the initial prompt.
 
-The current `sd_order_pending` value is a separate final system-instruction text
-part using native REST `{{lhc.var.sd_order_pending}}` JSON interpolation. Do not
-put a single-brace workflow placeholder inside raw REST JSON: it remains literal.
+Both REST methods send an explicit final system text part with `sd_order_pending=1` or
+`sd_order_pending=0`. Native conditional blocks read `args.chat.chat_variables_array.sd_order_pending`.
+During collection, a repeat handoff in 2045, 2185 or 2176 goes to 2190 before it can overwrite
+the saved route or summary. The Return button still cancels through 2174. The collection actions
+save the operator-facing purchase attributes without queuing client-side panel refreshes in
+`operation_admin`, which can fill up when operators use Telegram.
 
 ## Native guards and state
 

@@ -17,6 +17,11 @@ if ($tBot->webhook_set == 2 && !hash_equals($tBot->webhook_secret, (string)($_SE
     exit;
 }
 
+// Preserve the existing webhook for every other operator and customer interaction.
+if (\LiveHelperChatExtension\lhctelegram\providers\TelegramOrderBridge::handle($tBot)) {
+    exit;
+}
+
 $telegramExt = erLhcoreClassModule::getExtensionInstance('erLhcoreClassExtensionLhctelegram');
 $telegramExt->setBot($tBot);
 

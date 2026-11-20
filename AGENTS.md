@@ -90,3 +90,11 @@ there is not forwarded again (`isTopicMessageAlreadySent`) — that is how opera
 Server map: `/root/AGENTS.md`. LHC core notes: `/var/www/html/livehelperchat/AGENTS.md`.
 
 Topic channel labels are independent of business routing; see `agent-docs/topic-sources.md`.
+
+Order cards use the existing operator webhook for bot 1. `TelegramOrderBridge` forwards `ord:` callbacks,
+direct replies to its order prompts, and `/order` and `/orders` from confirmed, active operators in the
+configured group to the shop at `127.0.0.1:3000/api/telegram/orders`. The webhook must have a secret token;
+the bridge signs the exact body and timestamp using the bot credential. The shop separately checks its
+numeric order-operator allowlist, current order topic, original card and action. Order commands in other
+topics fall through to LHC. Keep the customer bot's incoming webhook and Telegram polling configuration
+unchanged. After deploying the bridge, clear the LHC module cache as described above.

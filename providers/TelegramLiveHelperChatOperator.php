@@ -1628,6 +1628,10 @@ class TelegramLiveHelperChatOperator {
                 if (!self::forwardPendingMessages($messages, $tchat, $chat, $topicContext)) {
                     return;
                 }
+            } catch (\GuzzleHttp\Exception\TransferException | \Longman\TelegramBot\Exception\TelegramException $e) {
+                // A missing operator-topic receipt must not fail a visitor webhook or a delivered bot reply.
+                // The next topic event resumes at the last acknowledged item. Request URLs contain the bot token.
+                self::logTopicError('Operator topic delivery failed (' . get_class($e) . '); cursor retained', $chat->id);
             } finally {
                 self::releaseTelegramMessageLock($tchat->id, $namespace);
             }
